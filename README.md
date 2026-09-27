@@ -106,7 +106,7 @@ The offline bundle (`APIConnect-catalog-bundle-<date>.zip`) contains this reposi
 yq, oasdiff, jq, a standalone Spectral and yamllint wheels, and `docs/guide.pdf`. On the agent:
 
 ```bash
-sudo tools/install-offline.sh                 # verifies SHA256SUMS, installs to /usr/local/bin, pip installs yamllint
+sudo bash tools/install-offline.sh                 # verifies SHA256SUMS, installs to /usr/local/bin, pip installs yamllint
 sudo install -m 0755 apic-slim /usr/local/bin/apic   # toolkit from your tenant, not in the bundle
 ```
 

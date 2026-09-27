@@ -548,7 +548,7 @@ error [api-path-removed-without-deprecation] in API GET /orders/{id}
     <li><b>Prepare the machine.</b> Linux x64 with bash 5, git 2.x, GNU coreutils, Python 3.9+ with pip, and the Azure DevOps agent installed as a dedicated user.</li>
     <li><b>Install the bundled tools.</b>
 <pre>unzip APIConnect-catalog-bundle-*.zip && cd APIConnect-catalog-bundle-*
-sudo tools/install-offline.sh              <span class="c"># verifies SHA256SUMS, installs to /usr/local/bin, pip installs yamllint</span></pre></li>
+sudo bash tools/install-offline.sh              <span class="c"># verifies SHA256SUMS, installs to /usr/local/bin, pip installs yamllint</span></pre></li>
     <li><b>Install the IBM toolkit.</b> In API Manager click <i>Tools for download</i>, download the Linux CLI and <code>credentials.json</code>.
 <pre>sudo install -m 0755 apic-slim /usr/local/bin/apic    <span class="c"># or `apic` if you downloaded CLI + Designer</span>
 apic --accept-license version                         <span class="c"># must match the tenant version, 10.0.8.x</span></pre></li>

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Offline installer for the pipeline tools on a Linux x64 Azure DevOps agent (no internet needed).
 #
-#   sudo tools/install-offline.sh [TOOLS_DIR] [PREFIX]
+#   sudo bash tools/install-offline.sh [TOOLS_DIR] [PREFIX]
 #
 #   TOOLS_DIR  directory that contains bin/, wheels/ and SHA256SUMS (default: linux-x64/ next to this script)
 #   PREFIX     where binaries are installed (default: /usr/local/bin)
