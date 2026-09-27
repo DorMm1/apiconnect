@@ -21,6 +21,8 @@ config/
   spectral.yml                 stage 2 rules (OAS 3.0 + APIC-specific)
   compat-ignore.txt            stage 4 reviewed exceptions (oasdiff --err-ignore)
 scripts/                       everything the pipeline runs; usable locally
+tools/install-offline.sh       installs the bundled tools on an on-prem (offline) Linux x64 agent
+docs/guide.pdf                 the readable guide (docs/guide.html is the source)
 projects/
   <project>/
     apis/<api>.yaml            OpenAPI 3.0.x + x-ibm-configuration (one file for all environments)
@@ -85,17 +87,31 @@ merge to main         : same validation (vs tag published/dev), then
 1. **Pipeline**: create from `.azure-pipelines/apic-ci.yml`. For a GitHub-hosted repo the `pr:` trigger is used;
    make the pipeline a required status check on `main`. For Azure Repos add a *Build validation* branch policy.
 2. **Variable group `apic-shared`** (plain): `APIC_SERVER` (management/platform API endpoint of your tenant),
-   `APIC_ORG` (provider organization name), `APIC_TOOLKIT_VERSION` (e.g. `10.0.8.9`).
+   `APIC_ORG` (provider organization name), `APIC_TOOLKIT_VERSION` (e.g. `10.0.8.9`), `TOOLS_MODE`
+   (`online` for Microsoft-hosted agents, `offline` for a self-hosted agent prepared with `tools/install-offline.sh`).
 3. **Variable groups `apic-dev`, `apic-test`, `apic-prod`**, linked to Azure Key Vault: `APIC_APIKEY`.
    Use one IBM Cloud IAM API key per environment, each belonging to a service ID that is a member of the
    provider org with a publish-capable role on that catalog only (least privilege).
 4. **Secure file `apic-toolkit-credentials.json`**: the `credentials.json` from API Manager -> *Tools for download*.
 5. **Environments `apic-dev`, `apic-test`, `apic-prod`**: add *Approvals* and *Exclusive lock* on test and prod.
-6. **Toolkit binary**: download the Linux CLI from API Manager -> *Tools for download*, publish it as a
-   Universal Package `apic-toolkit` (version = toolkit version) to the Artifacts feed `platform-tools`,
-   or use a self-hosted agent with `apic` on PATH (the download is skipped automatically).
+6. **Toolkit binary**: download the Linux CLI from API Manager -> *Tools for download*. Online agents: publish it as a
+   Universal Package `apic-toolkit` (version = toolkit version) to the Artifacts feed `platform-tools`.
+   Self-hosted agents: install it on PATH (the download is skipped automatically).
 7. **Repository permissions**: the pipeline pushes tags `published/<env>`. Grant the build identity
    *Contribute* + *Create tag* (GitHub: a token with `contents:write` used by the checkout step).
+
+## On-prem (offline) agent
+
+The offline bundle (`APIConnect-catalog-bundle-<date>.zip`) contains this repository, `tools/linux-x64/` with
+yq, oasdiff, jq, a standalone Spectral and yamllint wheels, and `docs/guide.pdf`. On the agent:
+
+```bash
+sudo tools/install-offline.sh                 # verifies SHA256SUMS, installs to /usr/local/bin, pip installs yamllint
+sudo install -m 0755 apic-slim /usr/local/bin/apic   # toolkit from your tenant, not in the bundle
+```
+
+Then set `TOOLS_MODE = offline` in `apic-shared` and point `pool:` in the pipeline files at your agent pool.
+In offline mode the tooling step never reaches the internet; a missing tool fails the job with a clear message.
 
 ## Items to verify on your tenant before the first publish
 

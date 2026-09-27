@@ -1,10 +1,17 @@
-# Installs the tools used by scripts/*.sh on an ubuntu-latest agent.
+# Installs the tools used by scripts/*.sh.
 #
-# apic toolkit: for API Connect SaaS the CLI is downloaded from your tenant (API Manager -> "Tools for
-# download"), it is not on a public URL. Upload it once as a Universal Package to Azure Artifacts:
+# Two modes, selected by the TOOLS_MODE variable (variable group apic-shared):
+#   online  (default)  Microsoft-hosted ubuntu-latest agent: everything is downloaded (yamllint via pip,
+#                      spectral via npm, yq/oasdiff from GitHub releases).
+#   offline            Self-hosted on-prem agent prepared once with `sudo tools/install-offline.sh` from the
+#                      offline bundle (yq, oasdiff, jq, standalone spectral, yamllint, and the apic toolkit
+#                      on PATH). No network access is attempted; missing tools fail the job immediately.
+#
+# apic toolkit (online mode): for API Connect SaaS the CLI is downloaded from your tenant (API Manager ->
+# "Tools for download"), it is not on a public URL. Upload it once as a Universal Package to Azure Artifacts:
 #   az artifacts universal publish --organization <org-url> --feed platform-tools --name apic-toolkit \
 #      --version 10.0.8.9 --path ./toolkit-dir      (toolkit-dir contains the linux `apic` binary)
-# On a self-hosted agent with `apic` already on PATH the download is skipped.
+# If `apic` is already on PATH the download is skipped in both modes.
 parameters:
 - name: apicFeed
   type: string
@@ -14,13 +21,31 @@ parameters:
   default: apic-toolkit
 
 steps:
+- bash: |
+    set -euo pipefail
+    chmod +x scripts/*.sh
+    MODE="${TOOLS_MODE:-online}"
+    echo "##vso[task.setvariable variable=TOOLS_MODE_EFFECTIVE]$MODE"
+    if [[ "$MODE" == "offline" ]]; then
+      missing=0
+      for t in yamllint spectral yq oasdiff jq git realpath; do
+        if command -v "$t" >/dev/null 2>&1; then printf '   %-9s %s\n' "$t" "$(command -v "$t")"; else echo "##vso[task.logissue type=error]offline mode: '$t' is not installed on this agent (run tools/install-offline.sh)"; missing=1; fi
+      done
+      (( missing == 0 )) || exit 1
+    fi
+  displayName: 'tools: mode'
+  env:
+    TOOLS_MODE: $(TOOLS_MODE)
+
 - task: UsePythonVersion@0
   displayName: 'tools: python'
+  condition: and(succeeded(), ne(variables['TOOLS_MODE_EFFECTIVE'], 'offline'))
   inputs:
     versionSpec: '3.x'
 
 - task: NodeTool@0
   displayName: 'tools: node'
+  condition: and(succeeded(), ne(variables['TOOLS_MODE_EFFECTIVE'], 'offline'))
   inputs:
     versionSpec: '20.x'
 
@@ -36,9 +61,12 @@ steps:
     curl -fsSL "https://github.com/oasdiff/oasdiff/releases/download/v${OASDIFF_VERSION}/oasdiff_${OASDIFF_VERSION}_linux_amd64.tar.gz" \
       | sudo tar -xz -C /usr/local/bin oasdiff
     sudo apt-get install -y -qq jq >/dev/null 2>&1 || true   # jq is preinstalled on hosted agents; no-op there
-    chmod +x scripts/*.sh
-    echo "yamllint $(yamllint --version | cut -d' ' -f2) | spectral $(spectral --version) | yq $(yq --version | awk '{print $NF}') | oasdiff $(oasdiff --version | awk '{print $NF}')"
-  displayName: 'tools: yamllint / spectral / yq / oasdiff'
+  displayName: 'tools: download yamllint / spectral / yq / oasdiff'
+  condition: and(succeeded(), ne(variables['TOOLS_MODE_EFFECTIVE'], 'offline'))
+
+- bash: |
+    echo "yamllint $(yamllint --version | awk '{print $NF}') | spectral $(spectral --version) | yq $(yq --version | awk '{print $NF}') | oasdiff $(oasdiff --version | awk '{print $NF}') | jq $(jq --version)"
+  displayName: 'tools: versions'
 
 - bash: |
     if command -v apic >/dev/null 2>&1; then
@@ -46,6 +74,10 @@ steps:
       echo "##vso[task.setvariable variable=APIC_PRESENT]true"
     else
       echo "##vso[task.setvariable variable=APIC_PRESENT]false"
+      if [[ "$(TOOLS_MODE_EFFECTIVE)" == "offline" ]]; then
+        echo "##vso[task.logissue type=error]offline mode: the apic toolkit is not on PATH. Download it from API Manager -> Tools for download and install it on the agent."
+        exit 1
+      fi
     fi
   displayName: 'tools: detect apic'
 
