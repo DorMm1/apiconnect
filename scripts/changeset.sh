@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Stage 0 orchestrator - computes change sets per environment/stage and writes them to OUT_DIR.
+# Stage 0 orchestrator - computes change sets per folder/stage and writes them to OUT_DIR.
 #
-#   changeset.sh --mode pr    --base <git-ref>  OUT_DIR   # PR: every env, baseline = the target branch
-#   changeset.sh --mode main                    OUT_DIR   # main: every env, baseline = tag published/<first stage of env>
-#   changeset.sh --mode stage --stage <stage>   OUT_DIR   # one stage: its env only, baseline = tag published/<stage>
+#   changeset.sh --mode pr    --base <git-ref>  OUT_DIR   # PR: every folder, baseline = the target branch
+#   changeset.sh --mode main                    OUT_DIR   # main: every folder, baseline = tag of the folder's first stage
+#   changeset.sh --mode stage --stage <stage>   OUT_DIR   # one stage: its folder only, baseline = tag published/<stage>
 #
-# OUT_DIR/products.txt          union of selected products
-# OUT_DIR/apis.txt              APIs referenced by those products
-# OUT_DIR/products.<env>.txt    selected products of one environment
-# OUT_DIR/base.<env>            git ref used as baseline for that environment (for compat-check --mode git)
-# OUT_DIR/stages.txt            (main mode) "<stage> <true|false>" - whether the stage has unpublished changes
+# OUT_DIR/products.txt            union of selected products
+# OUT_DIR/apis.txt                APIs referenced by those products
+# OUT_DIR/products.<folder>.txt   selected products of one folder
+# OUT_DIR/base.<folder>           git ref used as baseline for that folder (for compat-check --mode git)
+# OUT_DIR/stages.txt              (main mode) "<stage> <true|false>" - whether the stage's folder changed since its tag
 #
 # A missing published/<stage> tag means "never published from Git" -> baseline = empty tree -> everything selected.
 set -euo pipefail
@@ -39,44 +39,43 @@ tag_base() {
   git fetch -q origin "+refs/tags/${tag}:refs/tags/${tag}" 2>/dev/null || true
   git rev-parse -q --verify "refs/tags/${tag}^{commit}" 2>/dev/null || echo "$EMPTY_TREE"
 }
-
 describe_base() { [[ "$1" == "$EMPTY_TREE" ]] && echo "<never published>" || git log -1 --format='%h %s' "$1"; }
 
 case "$MODE" in
   pr)
     [[ -n "$BASE" ]] || { vso_error "--base required in pr mode"; exit 2; }
-    for env in $(list_envs); do
-      echo "$BASE" > "$OUT/base.$env"
-      "$HERE/changed-products.sh" "$BASE" HEAD "$OUT/products.$env.txt" --env "$env"
+    for folder in $(list_folders); do
+      echo "$BASE" > "$OUT/base.$folder"
+      "$HERE/changed-products.sh" "$BASE" HEAD "$OUT/products.$folder.txt" --folder "$folder"
     done
     ;;
   main)
-    for env in $(list_envs); do
-      first=$(env_stages "$env" | head -n1)
+    for folder in $(list_folders); do
+      first=$(folder_stages "$folder" | head -n1)
       base=$(tag_base "$first")
-      echo "$base" > "$OUT/base.$env"
-      log "env '$env': baseline = published/$first -> $(describe_base "$base")"
-      "$HERE/changed-products.sh" "$base" HEAD "$OUT/products.$env.txt" --env "$env"
-      for stage in $(env_stages "$env"); do
-        sbase=$(tag_base "$stage")
-        "$HERE/changed-products.sh" "$sbase" HEAD "$OUT/.stage.$stage.txt" --env "$env" >/dev/null 2>&1
-        if [[ -s "$OUT/.stage.$stage.txt" ]]; then echo "$stage true"; else echo "$stage false"; fi >> "$OUT/stages.txt"
-        rm -f "$OUT/.stage.$stage.txt"
-      done
+      echo "$base" > "$OUT/base.$folder"
+      log "folder '$folder': baseline = published/$first -> $(describe_base "$base")"
+      "$HERE/changed-products.sh" "$base" HEAD "$OUT/products.$folder.txt" --folder "$folder"
+    done
+    for stage in $(list_stages); do
+      folder=$(stage_folder "$stage"); sbase=$(tag_base "$stage")
+      "$HERE/changed-products.sh" "$sbase" HEAD "$OUT/.stage.$stage.txt" --folder "$folder" >/dev/null 2>&1
+      if [[ -s "$OUT/.stage.$stage.txt" ]]; then echo "$stage true"; else echo "$stage false"; fi >> "$OUT/stages.txt"
+      rm -f "$OUT/.stage.$stage.txt"
     done
     log "Stages with unpublished changes:"; sed 's/^/  /' "$OUT/stages.txt"
     ;;
   stage)
     [[ -n "$STAGE" ]] || { vso_error "--stage required in stage mode"; exit 2; }
-    env=$(stage_env "$STAGE")
-    base=$(tag_base "$STAGE")
-    echo "$base" > "$OUT/base.$env"
+    require_stage "$STAGE"
+    folder=$(stage_folder "$STAGE"); base=$(tag_base "$STAGE")
+    echo "$base" > "$OUT/base.$folder"
     if [[ "$base" == "$EMPTY_TREE" ]]; then
-      vso_warning "No tag published/$STAGE yet: bootstrapping - every product of env '$env' will be published"
+      vso_warning "No tag published/$STAGE yet: bootstrapping - every product of folder '$folder' will be published"
     else
-      log "stage '$STAGE' (env '$env'): last publish = $(describe_base "$base")"
+      log "stage '$STAGE' (folder '$folder' -> instance '$(stage_instance "$STAGE")'): last publish = $(describe_base "$base")"
     fi
-    "$HERE/changed-products.sh" "$base" HEAD "$OUT/products.$env.txt" --env "$env"
+    "$HERE/changed-products.sh" "$base" HEAD "$OUT/products.$folder.txt" --folder "$folder"
     ;;
   *) vso_error "--mode must be pr, main or stage"; exit 2 ;;
 esac

@@ -18,8 +18,8 @@ visibility:
     tags: []
     enabled: true
 apis:
-  # Repository policy: APIs are referenced ONLY by relative $ref into ../apis/ of the SAME environment folder
-  # (checked in stage 3). This file is identical in dev/, test/ and prod/ except for the version being promoted.
+  # Repository policy: APIs are referenced ONLY by relative $ref into ../apis/ of the SAME folder (checked in
+  # stage 3). This file is identical in dev/, test/ and prod/ except for the version being promoted.
   example-api:
     $ref: ../apis/example-api.yaml
 plans:

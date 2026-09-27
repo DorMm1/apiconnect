@@ -3,9 +3,9 @@
 #
 #   publish.sh --stage <stage> PRODUCTS_LIST_FILE
 #
-# The catalog is derived per product: projects/<project>/<env>/products/x.yaml + stage -> catalog_for(project, stage)
-# (config/environments.yml pattern, or projects/<project>/project.yaml override). Every product in the list must
-# belong to the stage's environment folder.
+# The catalog is derived per product: projects/<project>/<folder>/products/x.yaml + stage -> catalog_for(project, stage)
+# (config/topology.yml pattern, or projects/<project>/project.yaml override). Every product in the list must
+# belong to the stage's folder.
 #
 # Needs APIC_SERVER/APIC_ORG of the stage's instance and an existing toolkit session. Never deletes or retires anything.
 # Publishing a product name:version that already exists in the catalog updates it in place (used for non-breaking
@@ -25,24 +25,29 @@ while [[ $# -gt 1 ]]; do
 done
 LIST="${1:?products list file required}"
 [[ -n "$STAGE" ]] || { vso_error "--stage is required"; exit 2; }
-ENV=$(stage_env "$STAGE")
+require_stage "$STAGE"; FOLDER=$(stage_folder "$STAGE"); INSTANCE=$(stage_instance "$STAGE")
 
 mapfile -t PRODUCTS < <(read_list "$LIST")
 (( ${#PRODUCTS[@]} )) || { log "Publish: nothing to publish for stage '$STAGE'"; exit 0; }
 
+# Guard before any toolkit call: every file must belong to the stage's folder
+for p in "${PRODUCTS[@]}"; do
+  if [[ "$(path_kind "$p")" != products || "$(path_folder "$p")" != "$FOLDER" ]]; then
+    vso_error "Refusing to publish: '$p' is not under projects/<project>/$FOLDER/products/ (stage '$STAGE' publishes folder '$FOLDER')" "$p"
+    exit 2
+  fi
+done
+
 mkdir -p out/publish
-vso_section "Publish ${#PRODUCTS[@]} product(s) -> stage '$STAGE' (env '$ENV', org '$APIC_ORG', server '$APIC_SERVER')"
+vso_section "Publish ${#PRODUCTS[@]} product(s) -> stage '$STAGE' (folder '$FOLDER' -> instance '$INSTANCE', org '$APIC_ORG', server '$APIC_SERVER')"
 FAIL=0
 
 product_state() { # CATALOG NAME:VERSION -> state or empty
   apic products:get $(apic_conn) --catalog "$1" --scope catalog --fields state \
-       --format json --output - "$2" 2>/dev/null | jq -r '.state // empty'
+       --format json --output - "$2" 2>/dev/null | jq -r '.state // empty' 2>/dev/null || true
 }
 
 for p in "${PRODUCTS[@]}"; do
-  if [[ "$(path_env "$p")" != "$ENV" ]]; then
-    vso_error "Refusing to publish: file belongs to env '$(path_env "$p")', stage '$STAGE' targets env '$ENV'" "$p"; FAIL=1; continue
-  fi
   project=$(path_project "$p"); catalog=$(catalog_for "$project" "$STAGE")
   name=$(yq_str "$p" '.info.name'); ver=$(yq_str "$p" '.info.version')
   [[ -n "$name" && -n "$ver" ]] || { vso_error "info.name and info.version are required" "$p"; FAIL=1; continue; }

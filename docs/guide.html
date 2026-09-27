@@ -101,9 +101,9 @@
       <div><b>Target platform</b>IBM API Connect 10.0.8.x — three instances (dev, test, prod)<br>DataPower API Gateway</div>
       <div><b>CI/CD</b>Azure DevOps Pipelines, self-hosted Linux x64 agent (on-prem) or Microsoft-hosted</div>
       <div><b>Repository</b>APIConnect-catalog (this bundle)</div>
-      <div><b>Document version</b>1.1 — 27 September 2026</div>
+      <div><b>Document version</b>1.2 — 27 September 2026</div>
       <div><b>Audience</b>Platform / integration engineers who operate the pipeline, and API developers who submit changes</div>
-      <div><b>Companion files</b>README.md (reference), config/environments.yml, .azure-pipelines/, scripts/, tools/</div>
+      <div><b>Companion files</b>README.md (reference), config/topology.yml, .azure-pipelines/, scripts/, tools/</div>
     </div>
     <p class="footer-note">This document explains the design and the day-to-day use. The README in the repository is the concise
     technical reference; where they differ, the repository files are authoritative.</p>
@@ -121,7 +121,7 @@
     <li>Life of a change — from a dev edit to production</li>
     <li>The four validation stages</li>
     <li>Backward compatibility and versioning policy</li>
-    <li>Publishing — five stages, three independent chains</li>
+    <li>Publishing — five independent stages, one folder each</li>
     <li>Promotion by pull request — dev → test → prod</li>
     <li>One file, five catalogs — catalog-specific properties</li>
     <li>Security — identities, secrets, permissions per instance</li>
@@ -166,11 +166,12 @@
     </tr>
     <tr>
       <td>How to <b>promote</b> dev → test → prod when every environment is a <i>separate instance</i>?</td>
-      <td><b>One folder per environment inside each project</b> (<code>dev/</code>, <code>test/</code>, <code>prod/</code>), promotion = a
-      pull request that copies the folder. Catalog-specific values stay <i>inside</i> the file.</td>
-      <td>Environments run different versions at different times, so the repository must be able to say “test has 1.1.0, prod has 1.0.0”.
-      A folder per environment makes that visible and reviewable. Branch-per-environment would need cherry-picks; a single file for all
-      environments could not express version skew. The two catalogs of an instance always hold the same files, so they share one folder.</td>
+      <td><b>Three version folders per project</b> (<code>dev/</code>, <code>test/</code>, <code>prod/</code>); each of the five catalogs is fed from one
+      of them; promotion = a pull request that copies a folder. Catalog-specific values stay <i>inside</i> the file.</td>
+      <td>Catalogs run different versions at different times, so the repository must be able to say “rc has 1.1.0, prod has 1.0.0”.
+      A folder per version makes that visible and reviewable. Branch-per-environment would need cherry-picks; a single file for all
+      catalogs could not express version skew. <code>-dev</code>, <code>-integ</code> and <code>-nightly</code> always show the development state,
+      so they share <code>dev/</code>; <code>-rc</code> and <code>prod</code> are deliberate releases, so they get their own folders.</td>
     </tr>
   </table>
 
@@ -179,7 +180,7 @@
     <ul style="margin-bottom:0">
       <li>Git is the single source of truth; API Manager becomes read-only for humans (viewer roles). Only the pipeline identities publish.</li>
       <li>Drafts in API Manager are not used at all — the PR <i>is</i> the draft.</li>
-      <li>Files are byte-identical across environment folders; only the <i>version present</i> differs. Nobody hand-edits <code>test/</code> or <code>prod/</code>.</li>
+      <li>Files are byte-identical across folders; only the <i>version present</i> differs. Nobody hand-edits <code>test/</code> or <code>prod/</code>.</li>
       <li>The pipeline never deletes, deprecates or retires anything. Removing an API from a gateway is a deliberate manual step.</li>
       <li>A breaking change is not forbidden — it just has to arrive as a new major version that coexists with the old one.</li>
     </ul>
@@ -190,30 +191,31 @@
 <div class="section">
   <h2>2. The big picture — three instances, five catalogs, one path to production</h2>
   <p>Each environment is its own API Connect installation with its own management endpoint, its own credentials and its own gateway.
-  Inside every instance a project owns one or two catalogs, named after the project.</p>
+  Inside every instance a project owns one or two catalogs, named after the project. Every catalog is fed from one of three
+  <b>version folders</b> in the repository; the folder colour below shows which.</p>
 
   <div class="topo">
     <div class="inst dev">
       <h4>dev instance</h4>
       <div class="sub">own cluster · own endpoint · own API key</div>
       <div class="folder">projects/&lt;project&gt;/dev/</div>
-      <div class="cat"><b>&lt;project&gt;-dev</b><span>published automatically on merge to main</span></div>
-      <div class="gate">▼ approval</div>
-      <div class="cat"><b>&lt;project&gt;-integ</b><span>same files, after approval</span></div>
+      <div class="cat"><b>&lt;project&gt;-dev</b><span>from dev/ · automatically on merge to main</span></div>
+      <div class="gate">▼ approval (same run)</div>
+      <div class="cat"><b>&lt;project&gt;-integ</b><span>from dev/ · same commit, after an approval click</span></div>
     </div>
     <div class="inst test">
       <h4>test instance</h4>
       <div class="sub">own cluster · own endpoint · own API key</div>
-      <div class="folder">projects/&lt;project&gt;/test/</div>
-      <div class="cat"><b>&lt;project&gt;-nightly</b><span>published automatically when test/ changes</span></div>
-      <div class="gate">▼ approval</div>
-      <div class="cat"><b>&lt;project&gt;-rc</b><span>same files, after approval</span></div>
+      <div class="folder">projects/&lt;project&gt;/dev/ &nbsp;+&nbsp; projects/&lt;project&gt;/test/</div>
+      <div class="cat" style="background:var(--green-soft);border-color:var(--green)"><b>&lt;project&gt;-nightly</b><span>from dev/ · every night by schedule · no approval</span></div>
+      <div class="gate">independent — no link between the two</div>
+      <div class="cat"><b>&lt;project&gt;-rc</b><span>from test/ · filled by a promotion PR · after approval</span></div>
     </div>
     <div class="inst prod">
       <h4>prod instance</h4>
       <div class="sub">own cluster · own endpoint · own API key</div>
       <div class="folder">projects/&lt;project&gt;/prod/</div>
-      <div class="cat"><b>&lt;project&gt;</b><span>published after approval when prod/ changes</span></div>
+      <div class="cat"><b>&lt;project&gt;</b><span>from prod/ · filled by a promotion PR · after approval</span></div>
     </div>
   </div>
 
@@ -223,11 +225,11 @@
     <div class="arrow">→</div>
     <div class="box blue"><b>2 · Validate</b><span>Four stages. Nothing is written to API Connect.</span></div>
     <div class="arrow">→</div>
-    <div class="box green"><b>3 · dev instance</b><span>Merge → <code>orders-dev</code>. Approve → <code>orders-integ</code>.</span></div>
+    <div class="box green"><b>3 · dev instance</b><span>Merge → <code>orders-dev</code>. Approve → <code>orders-integ</code>. That night → <code>orders-nightly</code>.</span></div>
     <div class="arrow">→</div>
     <div class="box violet"><b>4 · Promote</b><span><code>promote.sh orders dev test</code> copies the folder; PR; validate.</span></div>
     <div class="arrow">→</div>
-    <div class="box amber"><b>5 · test instance</b><span>Merge → <code>orders-nightly</code>. Approve → <code>orders-rc</code>.</span></div>
+    <div class="box amber"><b>5 · test instance</b><span>Merge, approve → <code>orders-rc</code>.</span></div>
     <div class="arrow">→</div>
     <div class="box violet"><b>6 · Promote</b><span><code>promote.sh orders test prod</code>; PR; validate.</span></div>
     <div class="arrow">→</div>
@@ -239,14 +241,22 @@
     <div class="stage"><span class="n">1</span><b>YAML syntax</b><p>Can the file be parsed at all? Tabs, duplicate keys, bad indentation.<br><code>yamllint</code></p></div>
     <div class="stage"><span class="n">2</span><b>OpenAPI validity</b><p>Is it a valid OpenAPI 3.0 document, and does it follow the APIC house rules?<br><code>spectral</code></p></div>
     <div class="stage"><span class="n">3</span><b>APIC validity</b><p>Would API Connect accept the Product and its APIs (IBM extensions, assembly)?<br><code>apic validate</code></p></div>
-    <div class="stage"><span class="n">4</span><b>Compatibility</b><p>Does the new contract break existing consumers of <i>that environment</i> without a major bump?<br><code>oasdiff</code></p></div>
+    <div class="stage"><span class="n">4</span><b>Compatibility</b><p>Does the new contract break existing consumers of <i>that folder's catalogs</i> without a major bump?<br><code>oasdiff</code></p></div>
   </div>
 
   <h3>What is published, exactly?</h3>
-  <p>Only what changed, per environment folder. Each of the five catalogs remembers the last commit it received through a Git tag
+  <p>Only what changed, per folder. Each of the five catalogs remembers the last commit it received through a Git tag
   (<code>published/dev</code>, <code>published/integ</code>, <code>published/nightly</code>, <code>published/rc</code>, <code>published/prod</code>).
-  The change set for a stage is “every product under <code>projects/*/&lt;env&gt;/</code> touched since its tag”. A stage with nothing new is
+  The change set for a stage is “every product under <code>projects/*/&lt;its folder&gt;/</code> touched since its tag”. A stage with nothing new is
   skipped, so approvers are never asked to approve an empty publish. The very first run (no tags yet) publishes every folder — the bootstrap.</p>
+  <table style="page-break-inside: avoid">
+    <tr><th style="width:12%">Stage</th><th style="width:16%">Folder</th><th style="width:14%">Instance</th><th style="width:22%">Catalog</th><th>Trigger</th></tr>
+    <tr><td><code>dev</code></td><td><code>dev/</code></td><td>dev</td><td><code>&lt;project&gt;-dev</code></td><td>merge to <code>main</code></td></tr>
+    <tr><td><code>integ</code></td><td><code>dev/</code></td><td>dev</td><td><code>&lt;project&gt;-integ</code></td><td>approval on Environment <code>apic-integ</code>, in the same run, after <code>dev</code></td></tr>
+    <tr><td><code>nightly</code></td><td><code>dev/</code></td><td>test</td><td><code>&lt;project&gt;-nightly</code></td><td>cron schedule (or a manual run); never on a merge; no approval</td></tr>
+    <tr><td><code>rc</code></td><td><code>test/</code></td><td>test</td><td><code>&lt;project&gt;-rc</code></td><td>approval on <code>apic-rc</code>, when <code>test/</code> changed (promotion PR)</td></tr>
+    <tr><td><code>prod</code></td><td><code>prod/</code></td><td>prod</td><td><code>&lt;project&gt;</code></td><td>approval on <code>apic-prod</code>, when <code>prod/</code> changed (promotion PR)</td></tr>
+  </table>
 </div>
 
 <!-- ===================================================== 3 -->
@@ -266,9 +276,11 @@
 
   <table>
     <tr><th style="width:20%">Term</th><th>What it means for you</th></tr>
-    <tr><td><b>Instance / environment</b></td><td>dev, test or prod cluster. Selected by the pipeline stage; credentials come from the variable group <code>apic-&lt;env&gt;</code>. The repository folder <code>projects/&lt;project&gt;/&lt;env&gt;/</code> says what the instance should have.</td></tr>
+    <tr><td><b>Instance / environment</b></td><td>dev, test or prod cluster. Selected by the pipeline stage; credentials come from the variable group <code>apic-&lt;instance&gt;</code>.</td></tr>
+    <tr><td><b>Version folder</b></td><td><code>projects/&lt;project&gt;/dev/</code>, <code>test/</code> or <code>prod/</code> — a version of the project's definitions. <code>dev/</code> feeds <code>-dev</code>, <code>-integ</code> and <code>-nightly</code>; <code>test/</code> feeds <code>-rc</code>; <code>prod/</code> feeds <code>&lt;project&gt;</code>.</td></tr>
+    <tr><td><b>Stage</b></td><td>One folder published to one catalog on one instance, with a trigger (merge, approval or schedule). Five stages, declared in <code>config/topology.yml</code>.</td></tr>
     <tr><td><b>Provider organization</b></td><td>The top-level container inside an instance. One per instance; its name is that instance's <code>APIC_ORG</code>.</td></tr>
-    <tr><td><b>Catalog</b></td><td>A stage: <code>&lt;project&gt;-dev</code>, <code>-integ</code>, <code>-nightly</code>, <code>-rc</code> or <code>&lt;project&gt;</code>. Whatever is <i>published</i> in a catalog is live on its gateway.</td></tr>
+    <tr><td><b>Catalog</b></td><td>The target of a stage: <code>&lt;project&gt;-dev</code>, <code>-integ</code>, <code>-nightly</code>, <code>-rc</code> or <code>&lt;project&gt;</code>. Whatever is <i>published</i> in a catalog is live on its gateway.</td></tr>
     <tr><td><b>Space</b></td><td>An optional sub-partition of a catalog with its own permissions. Not used here — projects are separated by having their own catalogs.</td></tr>
     <tr><td><b>Plan</b></td><td>Part of a Product: rate limits and whether subscriptions need approval. Consumers subscribe to a plan.</td></tr>
     <tr><td><b>Republish</b></td><td>Publishing a product <code>name:version</code> that already exists updates it in place; subscriptions are kept. Used for non-breaking changes.</td></tr>
@@ -287,12 +299,12 @@
   <h2>4. Repository layout</h2>
 <div class="tree"><span class="d">APIConnect-catalog/</span>
 ├── <span class="d">.azure-pipelines/</span>
-│   ├── apic-ci.yml                    <span class="m">the pipeline: validate → 5 publish stages in 3 independent chains</span>
+│   ├── apic-ci.yml                    <span class="m">the pipeline: validate → 5 independent publish stages (+ nightly cron)</span>
 │   └── <span class="d">templates/</span>
 │       ├── install-tools.yml          <span class="m">tooling; online (hosted agent) or offline (on-prem agent)</span>
 │       └── publish-stage.yml          <span class="m">one deployment stage per catalog</span>
 ├── <span class="d">config/</span>
-│   ├── environments.yml               <span class="m">instances, stages, catalog-name patterns — the scripts read this</span>
+│   ├── topology.yml                   <span class="m">instances, folders, stages, catalog-name patterns — the scripts read this</span>
 │   ├── .yamllint.yml                  <span class="m">stage 1 rules</span>
 │   ├── spectral.yml                   <span class="m">stage 2 rules: OpenAPI 3.0 + APIC house rules</span>
 │   └── compat-ignore.txt              <span class="m">stage 4 reviewed exceptions</span>
@@ -302,21 +314,21 @@
 └── <span class="d">projects/</span>
     └── <span class="d">&lt;project&gt;/</span>                     <span class="m">one folder per team / product area = ownership + catalog-name prefix</span>
         ├── project.yaml               <span class="m">optional: owner, catalog-name overrides</span>
-        ├── <span class="d">dev/</span>                       <span class="m">what the dev instance should have</span>
+        ├── <span class="d">dev/</span>                       <span class="m">development state → -dev (merge), -integ (approval), -nightly (schedule)</span>
         │   ├── <span class="d">apis/</span>&lt;api&gt;.yaml        <span class="m">OpenAPI 3.0.x + x-ibm-configuration</span>
         │   └── <span class="d">products/</span>&lt;product&gt;.yaml <span class="m">plans, rate limits, visibility; apis.*.$ref → ../apis/&lt;api&gt;.yaml</span>
-        ├── <span class="d">test/</span>                      <span class="m">same structure — what the test instance should have</span>
-        └── <span class="d">prod/</span>                      <span class="m">same structure — what the prod instance should have</span></div>
+        ├── <span class="d">test/</span>                      <span class="m">release candidate → -rc (approval); written only by promote.sh dev test</span>
+        └── <span class="d">prod/</span>                      <span class="m">production → &lt;project&gt; (approval); written only by promote.sh test prod</span></div>
 
   <h3>Why this shape</h3>
   <ul>
     <li><b>Project folder = catalog prefix.</b> <code>projects/orders/</code> publishes to <code>orders-dev</code>, <code>orders-integ</code>,
     <code>orders-nightly</code>, <code>orders-rc</code> and <code>orders</code>. If a catalog is named differently, declare it in <code>project.yaml</code>.</li>
-    <li><b>Environment folder = deployed version.</b> Looking at <code>projects/orders/prod/</code> answers “what does prod have?” without opening API Manager.</li>
+    <li><b>Version folder = what a set of catalogs has.</b> Looking at <code>projects/orders/prod/</code> answers “what does prod have?”, <code>test/</code> “what is the release candidate?”, <code>dev/</code> “what is in development (and therefore in <code>-dev</code>, <code>-integ</code> and last night's <code>-nightly</code>)?” — without opening API Manager.</li>
     <li><b><code>apis/</code> and <code>products/</code> side by side</b> so a Product references its APIs with an obvious relative <code>$ref</code>
     (<code>../apis/orders.yaml</code>) and the pipeline can map a changed API to the Product that must be republished.</li>
-    <li><b>No cross references.</b> A Product may only reference APIs in the same <code>&lt;project&gt;/&lt;env&gt;/apis/</code>. Stage 3 rejects anything else,
-    so an environment folder is always self-contained and publishable on its own.</li>
+    <li><b>No cross references.</b> A Product may only reference APIs in the same <code>&lt;project&gt;/&lt;folder&gt;/apis/</code>. Stage 3 rejects anything else,
+    so a folder is always self-contained and publishable on its own.</li>
   </ul>
 
   <h3>Conventions enforced automatically</h3>
@@ -324,8 +336,8 @@
     <tr><th style="width:62%">Rule</th><th>Enforced by</th></tr>
     <tr><td>Files are valid YAML</td><td>Stage 1</td></tr>
     <tr><td>OpenAPI 3.0.x; <code>info.x-ibm-name</code> is a lowercase slug; <code>info.version</code> is strict semver (<code>MAJOR.MINOR.PATCH</code>); exactly one <code>servers[]</code> entry; <code>x-ibm-configuration</code> present with an explicit <code>enforced</code>; gateway is <code>datapower-api-gateway</code>; no callbacks/links</td><td>Stage 2</td></tr>
-    <tr><td>Products reference APIs only via relative <code>$ref</code> into the same <code>&lt;project&gt;/&lt;env&gt;/apis/</code>; <code>apic validate</code> passes for the product and every API</td><td>Stage 3</td></tr>
-    <tr><td>No breaking contract change without a MAJOR bump, judged per environment folder</td><td>Stage 4</td></tr>
+    <tr><td>Products reference APIs only via relative <code>$ref</code> into the same <code>&lt;project&gt;/&lt;folder&gt;/apis/</code>; <code>apic validate</code> passes for the product and every API</td><td>Stage 3</td></tr>
+    <tr><td>No breaking contract change without a MAJOR bump, judged per folder</td><td>Stage 4</td></tr>
     <tr><td>Environment values live in <code>x-ibm-configuration.properties</code> + <code>catalogs.&lt;catalog&gt;.properties</code> for all five catalogs; <code>test/</code> and <code>prod/</code> are only ever written by <code>promote.sh</code></td><td>Code review</td></tr>
   </table>
 </div>
@@ -339,12 +351,13 @@
     <tr><td>2</td><td>Pipeline · <i>validate</i></td><td>Computes the change set against <code>origin/main</code>: the changed API and the Product(s) in <code>dev/</code> that <code>$ref</code> it. Runs stages 1 → 4. Stage 4 compares the file with its version on <code>main</code>.</td></tr>
     <tr><td>3</td><td>Pull request</td><td>The pipeline is a required status check. A red check blocks the merge; annotations point at file and line. The developer fixes and pushes; the pipeline reruns.</td></tr>
     <tr><td>4</td><td>Reviewer</td><td>Reviews the diff like any code. Approves. Merge to <code>main</code>.</td></tr>
-    <tr><td>5</td><td>Pipeline · <i>validate</i> (main)</td><td>Same four stages, now per environment against each environment's last-published tag. Flags which of the five stages have something new: here <code>dev</code> and <code>integ</code>.</td></tr>
+    <tr><td>5</td><td>Pipeline · <i>validate</i> (main)</td><td>Same four stages, now per folder against the folder's last-published tag. Flags which of the five stages have something new: here <code>dev</code>, <code>integ</code> and <code>nightly</code> (all fed from <code>dev/</code>); <code>rc</code> and <code>prod</code> are skipped.</td></tr>
     <tr><td>6</td><td>Pipeline · <i>publish_dev</i></td><td>Logs in to the <b>dev instance</b>, recomputes the change set since <code>published/dev</code>, runs the compatibility check against the <b>live</b> <code>orders-dev</code> catalog, publishes, verifies <code>state: published</code>, moves the tag.</td></tr>
-    <tr><td>7</td><td>Approver / <i>publish_integ</i></td><td>Environment <code>apic-integ</code> asks for approval. Same procedure into <code>orders-integ</code>, tag <code>published/integ</code>.</td></tr>
+    <tr><td>7</td><td>Approver / <i>publish_integ</i></td><td><b>This is the <code>-dev</code> → <code>-integ</code> promotion:</b> the same run now waits on Environment <code>apic-integ</code>. Whoever approves publishes the same commit into <code>orders-integ</code>, tag <code>published/integ</code>. Not approving leaves <code>-integ</code> as it was; the next run offers the accumulated changes again.</td></tr>
+    <tr><td>7b</td><td>Pipeline · <i>publish_nightly</i> (that night)</td><td>The cron run logs in to the <b>test instance</b> and publishes the current <code>dev/</code> — everything since <code>published/nightly</code> — into <code>orders-nightly</code>. No approval; nothing else runs on the scheduled run.</td></tr>
     <tr><td>8</td><td>Developer</td><td>When integration testing is done: <code>scripts/promote.sh orders dev test</code>. The script copies <code>dev/</code> over <code>test/</code> and prints the diff (1.0.0 → 1.1.0). Commit on a branch, open a <b>promotion PR</b>.</td></tr>
-    <tr><td>9</td><td>Pipeline · <i>validate</i> (PR)</td><td>Stage 4 now compares <code>test/apis/orders.yaml</code> <i>as it was</i> (1.0.0, what the test instance has) with the promoted 1.1.0 — the compatibility question is asked again for the test consumers. Reviewer approves, merge.</td></tr>
-    <tr><td>10</td><td>Pipeline · <i>publish_nightly</i> → <i>publish_rc</i></td><td>Logs in to the <b>test instance</b>; <code>orders-nightly</code> automatically, <code>orders-rc</code> after approval. The <code>dev</code> chain is skipped — nothing under <code>dev/</code> changed.</td></tr>
+    <tr><td>9</td><td>Pipeline · <i>validate</i> (PR)</td><td>Stage 4 now compares <code>test/apis/orders.yaml</code> <i>as it was</i> (1.0.0, what <code>orders-rc</code> has) with the promoted 1.1.0 — the compatibility question is asked again for the rc consumers. Reviewer approves, merge.</td></tr>
+    <tr><td>10</td><td>Approver / <i>publish_rc</i></td><td>Only <code>rc</code> has something new, so <code>dev</code>, <code>integ</code> and <code>prod</code> are skipped. After the approval on <code>apic-rc</code> the pipeline logs in to the <b>test instance</b> and publishes into <code>orders-rc</code>. <code>orders-nightly</code> is untouched — it keeps tracking <code>dev/</code> on its own schedule.</td></tr>
     <tr><td>11</td><td>Developer / Approver</td><td><code>scripts/promote.sh orders test prod</code>, PR, merge. <i>publish_prod</i> waits for approval, logs in to the <b>prod instance</b>, publishes to <code>orders</code>.</td></tr>
   </table>
 
@@ -356,7 +369,8 @@
   <div class="callout warn">
     <b>What if two merges happen back-to-back?</b>
     The second run's change set includes everything since the tag, so it cannot “miss” the first merge. The <i>Exclusive lock</i> check on the
-    Environments serialises publishes so two runs never publish into the same catalog concurrently.
+    Environments (set to “run latest”) cancels the older run's pending approval and serialises publishes, so only the newest approval matters and two
+    runs never publish into the same catalog concurrently.
   </div>
 </div>
 
@@ -380,13 +394,13 @@
     <tr>
       <td><b>3</b> APIC</td>
       <td><code>apic validate &lt;product.yaml&gt;</code></td>
-      <td>Repository policy first (relative <code>$ref</code>, file exists, same project <i>and</i> environment folder). Then the IBM toolkit validates the Product <i>and</i> every referenced API offline: IBM extensions, assembly policies, plan structure.</td>
+      <td>Repository policy first (relative <code>$ref</code>, file exists, same project <i>and</i> folder). Then the IBM toolkit validates the Product <i>and</i> every referenced API offline: IBM extensions, assembly policies, plan structure.</td>
       <td>The toolkit's message, with the product file annotated.</td>
     </tr>
     <tr>
       <td><b>4</b> Compat</td>
       <td><code>oasdiff breaking &lt;baseline&gt; &lt;new&gt;</code></td>
-      <td>Contract changes that would break an existing consumer (section 7). Baseline per environment folder: the file at the environment's last publish (PR: on the target branch), or the version live in the target catalog (before publish).</td>
+      <td>Contract changes that would break an existing consumer (section 7). Baseline per folder: the file at the folder's last publish (PR: on the target branch), or the version live in the target catalog (before publish).</td>
       <td>A list of breaking changes (rule id, method, path) and one error annotation on the API file.</td>
     </tr>
   </table>
@@ -447,8 +461,8 @@ error [api-path-removed-without-deprecation] in API GET /orders/{id}
   </div>
 
   <p>Stage 4 compares against the latest published version <i>with the same MAJOR</i>. A new MAJOR therefore has no baseline to break and is
-  allowed through (the differences are still printed for the reviewer). Because the check runs per environment folder, a promotion PR asks the
-  question again for the target environment's consumers: 1.0.0 → 1.1.0 may be fine in dev and still be flagged in prod if prod skipped a step.</p>
+  allowed through (the differences are still printed for the reviewer). Because the check runs per folder, a promotion PR asks the
+  question again for the target catalog's consumers: 1.0.0 → 1.1.0 may be fine in dev and still be flagged in prod if prod skipped a step.</p>
 
   <h3>Exceptions</h3>
   <p>Sometimes a change that oasdiff calls breaking is acceptable — an endpoint nobody ever subscribed to, or a field documented as
@@ -463,27 +477,36 @@ error [api-path-removed-without-deprecation] in API GET /orders/{id}
 
 <!-- ===================================================== 8 -->
 <div class="section">
-  <h2>8. Publishing — five stages, three independent chains</h2>
-  <p>After a merge to <code>main</code>, the pipeline runs three chains that do not wait for each other, because they publish different folders
-  to different instances:</p>
+  <h2>8. Publishing — five independent stages, one folder each</h2>
+  <p>Every publish stage answers one question: “does my folder have anything since my tag?” If yes it runs (behind its gate), if not it is
+  <i>Skipped</i>. Stages do not wait for each other, with one exception: <code>integ</code> waits for <code>dev</code> in the same run.</p>
   <table>
-    <tr><th style="width:14%">Chain</th><th style="width:20%">Folder</th><th style="width:28%">Stage → catalog</th><th>Gate</th></tr>
-    <tr><td><b>dev</b></td><td><code>projects/*/dev/</code></td><td><code>publish_dev</code> → <code>&lt;project&gt;-dev</code><br><code>publish_integ</code> → <code>&lt;project&gt;-integ</code></td><td>automatic<br>approval on Environment <code>apic-integ</code>, after <code>publish_dev</code> succeeded or was skipped</td></tr>
-    <tr><td><b>test</b></td><td><code>projects/*/test/</code></td><td><code>publish_nightly</code> → <code>&lt;project&gt;-nightly</code><br><code>publish_rc</code> → <code>&lt;project&gt;-rc</code></td><td>automatic<br>approval on <code>apic-rc</code>, after <code>publish_nightly</code></td></tr>
-    <tr><td><b>prod</b></td><td><code>projects/*/prod/</code></td><td><code>publish_prod</code> → <code>&lt;project&gt;</code></td><td>approval on <code>apic-prod</code></td></tr>
+    <tr><th style="width:13%">Stage</th><th style="width:15%">Folder</th><th style="width:22%">Catalog · instance</th><th>Runs when</th></tr>
+    <tr><td><code>publish_dev</code></td><td><code>projects/*/dev/</code></td><td><code>&lt;project&gt;-dev</code> · dev</td><td>merge to <code>main</code> (or manual run) and <code>dev/</code> changed since <code>published/dev</code>. No approval.</td></tr>
+    <tr><td><code>publish_integ</code></td><td><code>projects/*/dev/</code></td><td><code>&lt;project&gt;-integ</code> · dev</td><td>same run, after <code>publish_dev</code> succeeded or was skipped, when <code>dev/</code> changed since <code>published/integ</code>; <b>approval</b> on Environment <code>apic-integ</code>. <i>This approval is how you promote <code>-dev</code> → <code>-integ</code>.</i></td></tr>
+    <tr><td><code>publish_nightly</code></td><td><code>projects/*/dev/</code></td><td><code>&lt;project&gt;-nightly</code> · test</td><td><b>scheduled</b> run (cron in <code>apic-ci.yml</code>, e.g. 01:00 on weekdays) or a manual run, when <code>dev/</code> changed since <code>published/nightly</code>. Never on a merge; no approval. Independent of <code>rc</code>.</td></tr>
+    <tr><td><code>publish_rc</code></td><td><code>projects/*/test/</code></td><td><code>&lt;project&gt;-rc</code> · test</td><td>merge (a promotion PR) when <code>test/</code> changed since <code>published/rc</code>; <b>approval</b> on <code>apic-rc</code>.</td></tr>
+    <tr><td><code>publish_prod</code></td><td><code>projects/*/prod/</code></td><td><code>&lt;project&gt;</code> · prod</td><td>merge (a promotion PR) when <code>prod/</code> changed since <code>published/prod</code>; <b>approval</b> on <code>apic-prod</code>.</td></tr>
   </table>
-  <p>A stage runs only when the validate stage found something new for it (flag <code>changes.&lt;stage&gt;</code>); otherwise it is <i>Skipped</i>,
-  and a skipped first stage does not block the second one — <code>integ</code> may still have last week's unapproved change to publish.</p>
+  <p>On a <i>scheduled</i> run only <code>publish_nightly</code> can run; on a <i>merge</i> run every stage except <code>publish_nightly</code> can run;
+  a <i>manual</i> run may run all of them. The flag <code>changes.&lt;stage&gt;</code> is computed once by the validate stage for all five.</p>
+
+  <h3>Promoting <code>-dev</code> → <code>-integ</code></h3>
+  <p>Both catalogs are fed from <code>dev/</code>, so there is nothing to copy — the promotion is the <b>approval</b> on <code>apic-integ</code>.
+  After a merge, the run publishes to <code>-dev</code> and then waits. Approving publishes the <i>same commit</i> to <code>-integ</code>; rejecting
+  (or ignoring) leaves <code>-integ</code> as it was. If more merges land before you approve, each new run waits again with the accumulated
+  changes since <code>published/integ</code>; with the Environment's <i>Exclusive lock</i> set to “run latest”, the older pending approvals are
+  cancelled so there is only ever one approval to act on. Want <code>-integ</code> to lag behind for a while? Simply don't approve.</p>
 
   <h3>Inside a publish stage</h3>
   <ol>
     <li><b>Tools.</b> Online agents download them; offline agents must already have them (section 12).</li>
-    <li><b>Instance credentials.</b> <code>credentials.json</code> of <i>this</i> instance from the Secure File <code>apic-toolkit-credentials-&lt;env&gt;.json</code> → <code>apic client-creds:set</code>.</li>
-    <li><b>Login.</b> <code>apic iam-apikey --server $APIC_SERVER --apiKey $APIC_APIKEY</code> with the variable group <code>apic-&lt;env&gt;</code>, followed by a read-only
+    <li><b>Instance credentials.</b> <code>credentials.json</code> of <i>this</i> instance from the Secure File <code>apic-toolkit-credentials-&lt;instance&gt;.json</code> → <code>apic client-creds:set</code>.</li>
+    <li><b>Login.</b> <code>apic iam-apikey --server $APIC_SERVER --apiKey $APIC_APIKEY</code> with the variable group <code>apic-&lt;instance&gt;</code>, followed by a read-only
     <code>catalogs:list</code> as a smoke test that also proves the org and the instance are the right ones.</li>
-    <li><b>Change set.</b> Products under <code>projects/*/&lt;env&gt;/</code> touched since this stage's <code>published/&lt;stage&gt;</code> tag.</li>
+    <li><b>Change set.</b> Products under <code>projects/*/&lt;folder&gt;/</code> touched since this stage's <code>published/&lt;stage&gt;</code> tag.</li>
     <li><b>Live compatibility check.</b> Stage 4 again, but the baseline is fetched from each product's target catalog with <code>apic apis:get</code>. This catches drift caused by anyone who published outside Git.</li>
-    <li><b>Publish.</b> For each Product: catalog = pattern from <code>config/environments.yml</code> with the project name (or the <code>project.yaml</code> override); <code>apic products:publish --catalog &lt;catalog&gt; &lt;product.yaml&gt;</code> (with <code>--migrate_subscriptions</code> when the version already exists); then <code>products:get</code> must report <code>state: published</code>.</li>
+    <li><b>Publish.</b> For each Product: catalog = pattern from <code>config/topology.yml</code> with the project name (or the <code>project.yaml</code> override); <code>apic products:publish --catalog &lt;catalog&gt; &lt;product.yaml&gt;</code> (with <code>--migrate_subscriptions</code> when the version already exists); then <code>products:get</code> must report <code>state: published</code>.</li>
     <li><b>Mark.</b> Move the <code>published/&lt;stage&gt;</code> tag to this commit and push it.</li>
     <li><b>Always.</b> Publish logs as a build artifact; <code>apic logout</code>.</li>
   </ol>
@@ -496,8 +519,8 @@ error [api-path-removed-without-deprecation] in API GET /orders/{id}
 
   <h3>Rolling back</h3>
   <ul>
-    <li><b>Non-breaking regression in test or prod:</b> the previous version is still in the lower environment folder or in Git history —
-    restore the file in the environment folder (a PR), or run the pipeline for an earlier commit (<i>Run pipeline → select commit</i>).</li>
+    <li><b>Non-breaking regression in rc or prod:</b> the previous version is still in the lower folder or in Git history —
+    restore the file in the folder (a PR), or run the pipeline for an earlier commit (<i>Run pipeline → select commit</i>).</li>
     <li><b>After a major version:</b> <code>apic products:replace</code> back to the previous product version on that instance, then retire the new one.</li>
   </ul>
 </div>
@@ -513,7 +536,7 @@ error [api-path-removed-without-deprecation] in API GET /orders/{id}
   api     orders-api                     1.1.0
  projects/orders/test/apis/orders-api.yaml      | 16 +++++++++++++++-
  projects/orders/test/products/orders.yaml      |  2 +-
-Next: review 'git diff -- projects/orders/test', commit on a branch, open a pull request. Merging publishes to: nightly rc
+Next: review 'git diff -- projects/orders/test', commit on a branch, open a pull request. Merging publishes: rc -> orders-rc [approval]
 
 $ git checkout -b promote/orders-1.1.0-test
 $ git commit -am "promote orders 1.1.0 dev -> test"
@@ -522,7 +545,7 @@ $ git push -u origin HEAD          <span class="c"># then open the PR</span></pr
   <h3>What the PR shows and checks</h3>
   <ul>
     <li>The diff between what test has today and what it will have — reviewable like any code change.</li>
-    <li>Stage 4 with the <b>test</b> baseline: the compatibility question for test's consumers, independent of what happened in dev.</li>
+    <li>Stage 4 with the <b>test/</b> baseline: the compatibility question for the <code>-rc</code> consumers, independent of what happened in dev.</li>
     <li>Files that exist only in the target are kept and listed (use <code>--prune</code> to remove them). Remember that deleting a file never
     removes anything from API Connect.</li>
   </ul>
@@ -531,14 +554,15 @@ $ git push -u origin HEAD          <span class="c"># then open the PR</span></pr
   <table>
     <tr><th style="width:34%">Rule</th><th>Why</th></tr>
     <tr><td>Promote whole project folders, never single files</td><td>A Product and its APIs move together; a half-promoted folder fails stage 3 or publishes an inconsistent product.</td></tr>
-    <tr><td>Promote in order: dev → test → prod</td><td>The compatibility gate and the human review happen for each environment's consumers. Skipping test means prod gets a change nobody tested against its predecessor.</td></tr>
+    <tr><td>Promote in order: dev → test → prod</td><td>The compatibility gate and the human review happen for each folder's consumers. Skipping test means prod gets a change nobody tested as a release candidate.</td></tr>
+    <tr><td><code>-dev</code> → <code>-integ</code> and <code>-nightly</code> are not promotions</td><td>They are fed from <code>dev/</code> directly: <code>-integ</code> by an approval click, <code>-nightly</code> by the schedule. <code>promote.sh</code> is only for <code>dev → test</code> and <code>test → prod</code>.</td></tr>
     <tr><td>Never hand-edit <code>test/</code> or <code>prod/</code></td><td>Environment differences belong inside the file (section 10). Hand edits create drift that the next promotion silently overwrites.</td></tr>
     <tr><td>Hotfix in prod?</td><td>Fix in <code>dev/</code>, promote through test with two quick PRs. If you truly must jump, promote <code>dev → prod</code> directly and back-fill test right after — the gate still runs against prod's baseline.</td></tr>
   </table>
 
   <div class="callout">
     <b>Can dev run ahead of prod for a long time?</b>
-    Yes — that is the point of environment folders. <code>dev/</code> can be at 2.0.0 while <code>prod/</code> stays at 1.4.2 for months. When 2.0.0 is
+    Yes — that is the point of version folders. <code>dev/</code> can be at 2.0.0 while <code>prod/</code> stays at 1.4.2 for months. When 2.0.0 is
     promoted, prod receives a <i>new</i> product version next to the old one (section 7), and the old one is retired by hand later.
   </div>
 </div>
@@ -567,7 +591,7 @@ $ git push -u origin HEAD          <span class="c"># then open the PR</span></pr
       - invoke:
           version: 2.0.0
           target-url: $(target-url)$(request.path)          <span class="c"># resolved on the gateway</span></pre>
-  <p>Because every catalog's value travels inside the file, <code>promote.sh</code> is a pure copy, the folders stay byte-identical apart from
+  <p>Because every catalog's value travels inside the file, one <code>dev/</code> file serves <code>-dev</code>, <code>-integ</code> and <code>-nightly</code> at once, <code>promote.sh</code> is a pure copy, the folders stay byte-identical apart from
   the version being promoted, and the compatibility gate never sees an environment difference as a contract change (everything under
   <code>x-ibm-configuration</code> is ignored by oasdiff).</p>
 
@@ -656,7 +680,8 @@ apic --accept-license version                         <span class="c"># must mat
     <tr><td>2</td><td><b>Variable group</b> <code>apic-shared</code></td><td><code>APIC_TOOLKIT_VERSION</code> = e.g. <code>10.0.8.9</code> · <code>TOOLS_MODE</code> = <code>offline</code> (on-prem) or <code>online</code>.</td></tr>
     <tr><td>3</td><td><b>Variable groups</b> <code>apic-dev</code>, <code>apic-test</code>, <code>apic-prod</code></td><td>One per instance. Plain: <code>APIC_SERVER</code> (that instance's management/platform API endpoint), <code>APIC_ORG</code> (provider org on that instance). Secret, Key Vault-linked: <code>APIC_APIKEY</code>. Grant the pipeline access when prompted on first run.</td></tr>
     <tr><td>4</td><td><b>Secure files</b> <code>apic-toolkit-credentials-dev.json</code>, <code>-test.json</code>, <code>-prod.json</code></td><td>Pipelines → Library → Secure files. Upload each instance's <code>credentials.json</code>. Authorize the pipeline.</td></tr>
-    <tr><td>5</td><td><b>Environments</b> <code>apic-dev</code>, <code>apic-integ</code>, <code>apic-nightly</code>, <code>apic-rc</code>, <code>apic-prod</code></td><td>Pipelines → Environments. Add <i>Approvals</i> (the people allowed to promote) and <i>Exclusive lock</i> on <code>apic-integ</code>, <code>apic-rc</code> and <code>apic-prod</code>; optionally on the others.</td></tr>
+    <tr><td>5</td><td><b>Environments</b> <code>apic-dev</code>, <code>apic-integ</code>, <code>apic-nightly</code>, <code>apic-rc</code>, <code>apic-prod</code></td><td>Pipelines → Environments. Add <i>Approvals</i> (the people allowed to promote) on <code>apic-integ</code>, <code>apic-rc</code> and <code>apic-prod</code>. Add <i>Exclusive lock</i> with “run latest” on all five so a newer run supersedes an older pending approval. <code>apic-nightly</code> gets no approval — the cron decides.</td></tr>
+    <tr><td>5b</td><td><b>Schedule</b></td><td>The <code>schedules:</code> block in <code>apic-ci.yml</code> (default <code>0 1 * * 1-5</code>, UTC) drives <code>publish_nightly</code>. Adjust the cron to your quiet hours; keep <code>always: false</code> so a night without changes on <code>main</code> does nothing.</td></tr>
     <tr><td>6</td><td><b>Agent pool</b></td><td>Self-hosted pool with the prepared Linux agent (section 12), or Microsoft-hosted <code>ubuntu-latest</code> with <code>TOOLS_MODE=online</code> and the toolkit as a Universal Package in an Artifacts feed.</td></tr>
     <tr><td>7</td><td><b>Repository permissions</b></td><td>The build identity (<i>Project Collection Build Service</i> or the project's build service) needs <i>Contribute</i> and <i>Create tag</i> on the repository so <code>published/&lt;stage&gt;</code> tags can be pushed.</td></tr>
     <tr><td>8</td><td><b>Catalogs</b> (API Connect side)</td><td>On each instance, create the catalogs the pattern expects: <code>&lt;project&gt;-dev</code> and <code>-integ</code> on dev, <code>-nightly</code> and <code>-rc</code> on test, <code>&lt;project&gt;</code> on prod, each bound to the gateway service. Different names → <code>projects/&lt;project&gt;/project.yaml</code>.</td></tr>
@@ -665,7 +690,7 @@ apic --accept-license version                         <span class="c"># must mat
   <h3>First run</h3>
   <ol>
     <li>Open a pull request that touches only the sample project (e.g. edit a description in <code>dev/</code>). Confirm the four stages run and the check turns green.</li>
-    <li>Merge. Watch <code>publish_dev</code>: it should report “No tag published/dev yet: bootstrapping”, publish every product of <code>dev/</code> to <code>example-project-dev</code>, and create the tag. <code>publish_nightly</code> and <code>publish_prod</code> bootstrap their folders in the same run; <code>integ</code>, <code>rc</code> and <code>prod</code> wait for approval.</li>
+    <li>Merge. Watch <code>publish_dev</code>: it should report “No tag published/dev yet: bootstrapping”, publish every product of <code>dev/</code> to <code>example-project-dev</code>, and create the tag. <code>integ</code>, <code>rc</code> and <code>prod</code> wait for approval in the same run; <code>nightly</code> bootstraps on its first scheduled run (or start a manual run to do it now).</li>
     <li>In each API Manager, open the catalog and confirm the product is <i>Published</i>. Call the API through the gateway.</li>
     <li>Approve the gated stages when you are ready. Each creates its own tag.</li>
     <li>Delete <code>projects/example-project</code> in a PR once your first real API is in. Remember: deleting the files does not remove the products from the five catalogs — retire the sample product by hand.</li>
@@ -688,7 +713,7 @@ apic --accept-license version                         <span class="c"># must mat
   <code>projects/&lt;project&gt;/dev/{apis,products}/</code>. <code>test/</code> and <code>prod/</code> appear with the first promotion.</p>
 
   <h3>Make a non-breaking change</h3>
-  <p>Edit in <code>dev/</code>, optionally bump MINOR/PATCH, open a PR. The Product is republished in place in <code>-dev</code>/<code>-integ</code>; promote when ready.</p>
+  <p>Edit in <code>dev/</code>, optionally bump MINOR/PATCH, open a PR. The Product is republished in place in <code>-dev</code> on merge, in <code>-integ</code> on approval, in <code>-nightly</code> that night; promote to <code>test/</code> when ready for a release candidate.</p>
 
   <h3>Make a breaking change</h3>
   <ol>
@@ -707,12 +732,12 @@ apic --accept-license version                         <span class="c"># must mat
 
   <h3>Retire an API or Product (manual, by design)</h3>
   <ol>
-    <li>Remove the files from the environment folders in PRs (usually dev first, prod last). The pipeline warns “Deleted in Git but NOT removed from APIC”.</li>
+    <li>Remove the files from the folders in PRs (usually dev first, prod last). The pipeline warns “Deleted in Git but NOT removed from APIC”.</li>
     <li>On each instance, in API Manager or with the toolkit: deprecate → retire → delete the product version, per catalog.</li>
   </ol>
 
   <h3>Roll back</h3>
-  <p>Restore the previous file in the environment folder via a PR (it is in Git history: <code>git checkout &lt;commit&gt; -- projects/orders/prod</code>), or
+  <p>Restore the previous file in the folder via a PR (it is in Git history: <code>git checkout &lt;commit&gt; -- projects/orders/prod</code>), or
   <i>Run pipeline → select an earlier commit</i>. For a major version, <code>products:replace</code> back and retire the newer version.</p>
 
   <h3>Upgrade an instance / the toolkit</h3>
@@ -726,20 +751,22 @@ apic --accept-license version                         <span class="c"># must mat
   <h2>15. Troubleshooting — reading a failed run</h2>
   <table>
     <tr><th style="width:34%">Symptom</th><th>Meaning and fix</th></tr>
-    <tr><td>“No API/product changes detected” and everything skipped</td><td>Only files outside <code>projects/</code> changed, or files outside <code>&lt;project&gt;/&lt;env&gt;/{apis,products}/</code> (they are ignored with a log line). Expected.</td></tr>
-    <tr><td>A publish stage shows <i>Skipped</i></td><td>Its environment folder has nothing new since <code>published/&lt;stage&gt;</code>. Expected — e.g. a promotion to test skips the dev chain.</td></tr>
+    <tr><td>“No API/product changes detected” and everything skipped</td><td>Only files outside <code>projects/</code> changed, or files outside <code>&lt;project&gt;/&lt;folder&gt;/{apis,products}/</code> (they are ignored with a log line). Expected.</td></tr>
+    <tr><td>A publish stage shows <i>Skipped</i></td><td>Its folder has nothing new since <code>published/&lt;stage&gt;</code>, or the trigger does not match the run (e.g. <code>nightly</code> on a merge run, everything but <code>nightly</code> on the scheduled run). Expected.</td></tr>
+    <tr><td><code>publish_nightly</code> never runs</td><td>Check that the <code>schedules:</code> block is present on <code>main</code> (schedules are read from the default branch), that the cron is in UTC, and that <code>dev/</code> actually changed since <code>published/nightly</code>. A manual run publishes it immediately.</td></tr>
+    <tr><td><code>-integ</code> is behind <code>-dev</code></td><td>By design until someone approves <code>publish_integ</code>. Look for the run waiting on Environment <code>apic-integ</code>; the newest one carries every change since <code>published/integ</code>.</td></tr>
     <tr><td>Stage 1 <code>found character '\t' that cannot start any token</code></td><td>A tab in the YAML. Replace with spaces.</td></tr>
     <tr><td>Stage 2 <code>apic-x-ibm-name</code> / <code>apic-semver-version</code></td><td>Add <code>info.x-ibm-name</code> (lowercase slug) or make <code>info.version</code> <code>MAJOR.MINOR.PATCH</code>.</td></tr>
     <tr><td>Stage 2 <code>apic-single-server</code></td><td>Only one <code>servers[]</code> entry is allowed; its path is the base path.</td></tr>
     <tr><td>Stage 3 “must use a relative $ref …”</td><td>The Product references an API by <code>name:version</code>. Use <code>$ref: ../apis/&lt;file&gt;.yaml</code>.</td></tr>
-    <tr><td>Stage 3 “points outside projects/…/test/apis/ (cross-project / cross-environment …)”</td><td>A Product in one environment folder references an API in another. Each folder must be self-contained; run <code>promote.sh</code> instead of hand-linking.</td></tr>
+    <tr><td>Stage 3 “points outside projects/…/test/apis/ (cross-project / cross-folder …)”</td><td>A Product in one folder references an API in another. Each folder must be self-contained; run <code>promote.sh</code> instead of hand-linking.</td></tr>
     <tr><td>Stage 3 <code>apic validate</code> error text</td><td>IBM extension or assembly problem; the message is the toolkit's. Run <code>apic validate &lt;product&gt;</code> locally to iterate quickly.</td></tr>
     <tr><td>Stage 4 “BREAKING change … without a MAJOR version bump” on a <i>promotion</i> PR</td><td>The target environment's consumers would break: the version now in <code>test/</code> or <code>prod/</code> is not compatible with the one that was there. Promote a MAJOR version instead, or add a reviewed exception (section 7).</td></tr>
     <tr><td>Stage 4 “oasdiff failed (exit 2)”</td><td>oasdiff could not load one of the specs — usually a <code>$ref</code> to a missing component. Fix the spec; stage 2 normally catches this first.</td></tr>
     <tr><td>Publish: “offline mode: 'X' is not installed on this agent”</td><td>Run <code>tools/install-offline.sh</code> on the agent, or install the toolkit; check PATH for the agent user.</td></tr>
     <tr><td>Publish: login fails</td><td>Check <code>APIC_SERVER</code> of <i>that</i> instance, that the API key's service ID is a member of that instance's provider org, and that the key is not expired. Try the same command interactively from the agent.</td></tr>
     <tr><td>Publish: <code>catalogs:list</code> works but publish says catalog not found</td><td>The catalog name derived from the project folder (<code>&lt;project&gt;-integ</code> etc.) does not exist on that instance. Create it, or declare the real name in <code>projects/&lt;project&gt;/project.yaml</code>.</td></tr>
-    <tr><td>Publish: “Refusing to publish: … is not under projects/&lt;project&gt;/prod/products/”</td><td>Safety guard: a stage only publishes its own environment folder. Should not happen from the pipeline; happens when running <code>publish.sh</code> by hand with the wrong list.</td></tr>
+    <tr><td>Publish: “Refusing to publish: … is not under projects/&lt;project&gt;/prod/products/”</td><td>Safety guard: a stage only publishes its own folder. Should not happen from the pipeline; happens when running <code>publish.sh</code> by hand with the wrong list.</td></tr>
     <tr><td>Publish: live compatibility check fails but the PR passed</td><td>What is live in the catalog differs from what Git thinks — someone published outside Git on that instance. Reconcile: export the live definition, compare, decide, then republish from Git.</td></tr>
     <tr><td>Publish: “ended in state 'staged'/'pending'”</td><td>The product uploaded but did not activate. Check the catalog's gateway service and any approval/task settings in Catalog settings on that instance.</td></tr>
     <tr><td>Publish: <code>git push … refs/tags/published/…</code> permission denied</td><td>Grant the build identity <i>Contribute</i> + <i>Create tag</i>. The publish itself already happened; rerun the stage to set the tag.</td></tr>
@@ -774,23 +801,23 @@ apic --accept-license version                         <span class="c"># must mat
   <h3>Configuration</h3>
   <table>
     <tr><th style="width:30%">File</th><th>Role</th></tr>
-    <tr><td><code>config/environments.yml</code></td><td>Instances, their stages and catalog-name patterns (<code>{project}-dev</code> …). Read by every script; mirrored by the stage list in <code>apic-ci.yml</code>.</td></tr>
+    <tr><td><code>config/topology.yml</code></td><td>Instances, and the five stages: folder → catalog pattern (<code>{project}-dev</code> …) → instance, with trigger (merge / approval / schedule). Read by every script; mirrored by the stage list in <code>apic-ci.yml</code>.</td></tr>
     <tr><td><code>projects/&lt;project&gt;/project.yaml</code></td><td>Optional: owner, and <code>catalogs: { &lt;stage&gt;: &lt;name&gt; }</code> overrides when a catalog does not follow the pattern.</td></tr>
   </table>
   <h3>Scripts</h3>
   <table>
     <tr><th style="width:34%">Script</th><th>Role</th></tr>
     <tr><td><code>scripts/lib.sh</code></td><td>Shared helpers: logging, Azure DevOps annotations, path → project/env, stage → env/catalog resolution.</td></tr>
-    <tr><td><code>scripts/changeset.sh --mode pr|main|stage …</code></td><td>Stage 0 orchestrator: per-environment change sets and baselines; in main mode also the per-stage “has changes” flags.</td></tr>
-    <tr><td><code>scripts/changed-products.sh BASE HEAD OUT --env E</code></td><td>Git diff → Product list for one environment folder; deleted files → warning only.</td></tr>
+    <tr><td><code>scripts/changeset.sh --mode pr|main|stage …</code></td><td>Stage 0 orchestrator: per-folder change sets and baselines; in main mode also the per-stage “has changes” flags.</td></tr>
+    <tr><td><code>scripts/changed-products.sh BASE HEAD OUT --folder F</code></td><td>Git diff → Product list for one folder; deleted files → warning only.</td></tr>
     <tr><td><code>scripts/product-apis.sh --list FILE</code></td><td>Product list → referenced API files.</td></tr>
     <tr><td><code>scripts/validate-yaml.sh LIST…</code></td><td>Stage 1, yamllint.</td></tr>
     <tr><td><code>scripts/validate-oas.sh APIS</code></td><td>Stage 2, spectral; writes <code>out/spectral.xml</code>.</td></tr>
-    <tr><td><code>scripts/validate-apic.sh PRODUCTS</code></td><td>Stage 3, <code>$ref</code> policy (same project and environment) + <code>apic validate</code>.</td></tr>
-    <tr><td><code>scripts/validate-compat.sh OUT_DIR</code></td><td>Stage 4 in git mode, once per environment against its own baseline.</td></tr>
+    <tr><td><code>scripts/validate-apic.sh PRODUCTS</code></td><td>Stage 3, <code>$ref</code> policy (same project and folder) + <code>apic validate</code>.</td></tr>
+    <tr><td><code>scripts/validate-compat.sh OUT_DIR</code></td><td>Stage 4 in git mode, once per folder against its own baseline.</td></tr>
     <tr><td><code>scripts/compat-check.sh --mode git|live …</code></td><td>oasdiff for one list; live mode fetches baselines from each product's catalog for the given stage.</td></tr>
-    <tr><td><code>scripts/publish.sh --stage S PRODUCTS</code></td><td><code>apic products:publish</code> into <code>catalog_for(project, stage)</code> + state assertion; refuses files from other environments.</td></tr>
-    <tr><td><code>scripts/promote.sh PROJECT FROM TO [--prune]</code></td><td>Copies an environment folder to the next one and shows the diff — the promotion PR helper.</td></tr>
+    <tr><td><code>scripts/publish.sh --stage S PRODUCTS</code></td><td><code>apic products:publish</code> into <code>catalog_for(project, stage)</code> + state assertion; refuses files outside the stage's folder.</td></tr>
+    <tr><td><code>scripts/promote.sh PROJECT FROM TO [--prune]</code></td><td>Copies a version folder to the next one (<code>dev → test</code>, <code>test → prod</code>) and shows the diff — the promotion PR helper.</td></tr>
     <tr><td><code>tools/install-offline.sh</code></td><td>Installs the bundled binaries and yamllint on an on-prem agent.</td></tr>
   </table>
 
@@ -810,7 +837,7 @@ apic --accept-license version                         <span class="c"># must mat
   <code>apic validate</code> · <code>apic apis:list</code> · <code>apic apis:get</code> · <code>apic products:publish</code> · <code>apic products:get</code> ·
   <code>apic logout</code>. Manual lifecycle: <code>apic products:replace</code> · <code>products:supersede</code> · <code>products:delete</code>.</p>
 
-  <p class="footer-note">APIConnect-catalog guide · v1.1 · generated from <code>docs/guide.html</code>. Regenerate the PDF with a Chromium-based browser:
+  <p class="footer-note">APIConnect-catalog guide · v1.2 · generated from <code>docs/guide.html</code>. Regenerate the PDF with a Chromium-based browser:
   <code>msedge --headless --print-to-pdf=guide.pdf --no-pdf-header-footer docs/guide.html</code>.</p>
 </div>
 

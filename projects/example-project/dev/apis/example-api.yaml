@@ -71,8 +71,8 @@ x-ibm-configuration:
   cors:
     enabled: true
   properties:
-    # Default value; overridden per catalog below so the SAME file can be promoted unchanged
-    # from dev/ to test/ to prod/. Keys are the catalog names of this project on every instance.
+    # Default value; overridden per catalog below so the SAME file can be promoted unchanged from dev/ to
+    # test/ to prod/. Keys are the five catalog names of this project across the three instances.
     target-url:
       value: https://example-dev.internal.example.com
       description: Backend base URL

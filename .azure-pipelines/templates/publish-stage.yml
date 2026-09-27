@@ -1,52 +1,66 @@
-# One deployment stage = one publish stage = one catalog per project on one API Connect instance.
-# Instantiated five times from apic-ci.yml: dev, integ (dev instance) / nightly, rc (test instance) / prod.
+# One deployment stage = one publish stage = one folder published to one catalog per project on one instance.
+# Instantiated from apic-ci.yml for every stage in config/topology.yml.
 #
 # Approvals, exclusive lock and other gates are configured on the Azure DevOps *Environment* apic-<stage>.
-# Credentials of the INSTANCE come from the variable group apic-<env> and the Secure File
-# apic-toolkit-credentials-<env>.json (each instance has its own management endpoint and toolkit credentials).
+# Credentials of the INSTANCE come from the variable group apic-<instance> and the Secure File
+# apic-toolkit-credentials-<instance>.json (each instance has its own management endpoint and toolkit credentials).
 #
-# What is published: the products under projects/*/<env>/ whose files changed since the git tag published/<stage>,
-# i.e. since the last successful publish to THIS stage. Missing tag (bootstrap) => every product of the environment.
+# What is published: the products under projects/*/<folder>/ whose files changed since the git tag published/<stage>,
+# i.e. since the last successful publish to THIS stage. Missing tag (bootstrap) => every product of the folder.
 # The stage is skipped entirely when the validate stage found nothing new for it, so approvers are never asked
 # to approve an empty publish.
+#
+# trigger:  merge     runs on pushes to main and manual runs
+#           approval  same as merge, plus the Environment's approval; with `after`, waits for that stage
+#           schedule  runs only on scheduled and manual runs (never on a plain merge)
 parameters:
-- name: env             # dev | test | prod  -> folder projects/*/<env>/, variable group apic-<env>, secure file
-  type: string
-- name: stage           # dev | integ | nightly | rc | prod -> Environment apic-<stage>, tag published/<stage>
-  type: string
-- name: catalog         # display only; the real name comes from config/environments.yml / project.yaml
-  type: string
-- name: dependsOn
-  type: object
-- name: previousStage   # stage that must have succeeded or been skipped first ('' for the first stage of an instance)
-  type: string
-  default: ''
+- { name: stage,    type: string }          # dev | integ | nightly | rc | prod -> Environment apic-<stage>, tag published/<stage>
+- { name: folder,   type: string }          # dev | test | prod -> projects/*/<folder>/
+- { name: instance, type: string }          # dev | test | prod -> variable group apic-<instance>, secure file
+- { name: catalog,  type: string }          # display only; the real name comes from config/topology.yml / project.yaml
+- { name: trigger,  type: string, values: [merge, approval, schedule] }
+- { name: dependsOn, type: object }
+- { name: after,    type: string, default: '' }   # stage of the same run that must have succeeded or been skipped first
 
 stages:
 - stage: publish_${{ parameters.stage }}
-  displayName: Publish ${{ parameters.stage }} -> ${{ parameters.catalog }} (${{ parameters.env }} instance)
+  displayName: Publish ${{ parameters.stage }} · ${{ parameters.folder }}/ -> ${{ parameters.catalog }} (${{ parameters.instance }} instance)
   dependsOn: ${{ parameters.dependsOn }}
-  # Only from main, never from a PR, only when this stage has unpublished changes, and (for the second catalog of an
-  # instance) only after the first catalog's stage succeeded or was skipped.
-  ${{ if eq(parameters.previousStage, '') }}:
+  # Common to all variants: only from main, never from a PR, validate succeeded, this stage's folder has unpublished
+  # changes (output variable changes.<stage> of the validate job).
+  ${{ if eq(parameters.trigger, 'schedule') }}:
+    # schedule: only scheduled or manual runs
     condition: >-
       and(
         eq(variables['Build.SourceBranch'], 'refs/heads/main'),
         ne(variables['Build.Reason'], 'PullRequest'),
+        in(variables['Build.Reason'], 'Schedule', 'Manual'),
         eq(dependencies.validate.result, 'Succeeded'),
+        eq(dependencies.validate.outputs['validate.changes.${{ parameters.stage }}'], 'true')
+      )
+  ${{ elseif ne(parameters.after, '') }}:
+    # merge/approval, second catalog of an instance: never on a scheduled run, only after the first catalog's stage
+    condition: >-
+      and(
+        eq(variables['Build.SourceBranch'], 'refs/heads/main'),
+        ne(variables['Build.Reason'], 'PullRequest'),
+        ne(variables['Build.Reason'], 'Schedule'),
+        eq(dependencies.validate.result, 'Succeeded'),
+        in(dependencies.${{ parameters.after }}.result, 'Succeeded', 'Skipped'),
         eq(dependencies.validate.outputs['validate.changes.${{ parameters.stage }}'], 'true')
       )
   ${{ else }}:
+    # merge/approval, first catalog of an instance: never on a scheduled run
     condition: >-
       and(
         eq(variables['Build.SourceBranch'], 'refs/heads/main'),
         ne(variables['Build.Reason'], 'PullRequest'),
+        ne(variables['Build.Reason'], 'Schedule'),
         eq(dependencies.validate.result, 'Succeeded'),
-        in(dependencies.${{ parameters.previousStage }}.result, 'Succeeded', 'Skipped'),
         eq(dependencies.validate.outputs['validate.changes.${{ parameters.stage }}'], 'true')
       )
   variables:
-  - group: apic-${{ parameters.env }}
+  - group: apic-${{ parameters.instance }}
   jobs:
   - deployment: publish
     displayName: apic products:publish
@@ -67,9 +81,9 @@ stages:
 
           - task: DownloadSecureFile@1
             name: apicCreds
-            displayName: Toolkit credentials.json of the ${{ parameters.env }} instance
+            displayName: Toolkit credentials.json of the ${{ parameters.instance }} instance
             inputs:
-              secureFile: apic-toolkit-credentials-${{ parameters.env }}.json
+              secureFile: apic-toolkit-credentials-${{ parameters.instance }}.json
 
           - bash: |
               set -euo pipefail
@@ -80,14 +94,14 @@ stages:
               apic iam-apikey --server "$APIC_SERVER" --apiKey "$APIC_APIKEY"
               # Smoke-test the session with a read-only call (also proves org and instance are right)
               apic catalogs:list --server "$APIC_SERVER" --org "$APIC_ORG" --fields name --format yaml --output -
-            displayName: apic login (${{ parameters.env }} instance)
+            displayName: apic login (${{ parameters.instance }} instance)
             env:
               APIC_ORG: $(APIC_ORG)
               APIC_SERVER: $(APIC_SERVER)
               APIC_APIKEY: $(APIC_APIKEY)       # secret: only ever passed through env
 
           - bash: scripts/changeset.sh --mode stage --stage "${{ parameters.stage }}" out/cs
-            displayName: Change set since published/${{ parameters.stage }}
+            displayName: Change set of ${{ parameters.folder }}/ since published/${{ parameters.stage }}
 
           - bash: scripts/compat-check.sh --mode live --stage "${{ parameters.stage }}" out/cs/products.txt
             displayName: "4' Compatibility vs live catalogs"

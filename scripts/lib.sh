@@ -39,14 +39,15 @@ apic_conn() { echo "--server ${APIC_SERVER} --org ${APIC_ORG}"; }
 resolve_ref() { realpath -m --relative-to=. "$(dirname "$1")/$2"; }
 
 # ---------------------------------------------------------------------------------------------
-# Topology: projects/<project>/<env>/{apis,products}/<file>.yaml   (see config/environments.yml)
+# Topology: projects/<project>/<folder>/{apis,products}/<file>.yaml   (see config/topology.yml)
+# A stage publishes ONE folder to ONE catalog on ONE instance.
 # ---------------------------------------------------------------------------------------------
-ENVIRONMENTS_FILE="${ENVIRONMENTS_FILE:-config/environments.yml}"
+TOPOLOGY_FILE="${TOPOLOGY_FILE:-config/topology.yml}"
 
 # path_project PATH -> project folder name
 path_project() { local p="${1#projects/}"; echo "${p%%/*}"; }
-# path_env PATH -> environment folder name (dev|test|prod)
-path_env()     { local p="${1#projects/}"; p="${p#*/}"; echo "${p%%/*}"; }
+# path_folder PATH -> version folder name (dev|test|prod)
+path_folder()  { local p="${1#projects/}"; p="${p#*/}"; echo "${p%%/*}"; }
 # path_kind PATH -> apis|products|other
 path_kind() {
   case "$1" in
@@ -56,21 +57,30 @@ path_kind() {
   esac
 }
 
-# list_envs -> environment names
-list_envs() { yq -r '.environments | keys | .[]' "$ENVIRONMENTS_FILE"; }
-# stage_env STAGE -> environment that owns the stage (fails if unknown)
-stage_env() {
-  local e
-  e=$(STAGE="$1" yq -r '.environments | to_entries[] | .key as $k | .value.stages[] | select(.name == strenv(STAGE)) | $k' "$ENVIRONMENTS_FILE" 2>/dev/null | head -n1)
-  [[ -n "$e" ]] || { vso_error "Unknown stage '$1' (see $ENVIRONMENTS_FILE)"; exit 2; }
-  echo "$e"
+# list_stages -> stage names in pipeline order
+list_stages()    { yq -r '.stages[].name' "$TOPOLOGY_FILE"; }
+# list_folders -> distinct folder names, in order of first appearance
+list_folders()   { yq -r '.stages[].folder' "$TOPOLOGY_FILE" | awk '!seen[$0]++'; }
+# list_instances -> instance names
+list_instances() { yq -r '.instances | keys | .[]' "$TOPOLOGY_FILE"; }
+
+# stage_attr STAGE ATTR -> attribute value or empty
+stage_attr() { STAGE="$1" ATTR="$2" yq -r '.stages[] | select(.name == strenv(STAGE)) | .[strenv(ATTR)] // ""' "$TOPOLOGY_FILE" 2>/dev/null; }
+# require_stage STAGE -> exits 2 if the stage is not declared
+require_stage() {
+  [[ -n "$(stage_attr "$1" name)" ]] || { vso_error "Unknown stage '$1' (see $TOPOLOGY_FILE)"; exit 2; }
 }
-# stage_catalog_pattern STAGE -> e.g. "{project}-dev"
-stage_catalog_pattern() {
-  STAGE="$1" yq -r '.environments[].stages[] | select(.name == strenv(STAGE)) | .catalog' "$ENVIRONMENTS_FILE"
+stage_folder()          { stage_attr "$1" folder; }
+stage_instance()        { stage_attr "$1" instance; }
+stage_trigger()         { stage_attr "$1" trigger; }
+stage_after()           { stage_attr "$1" after; }
+stage_catalog_pattern() { stage_attr "$1" catalog; }
+# folder_stages FOLDER -> stages that publish this folder, in order
+folder_stages() { FOLDER="$1" yq -r '.stages[] | select(.folder == strenv(FOLDER)) | .name' "$TOPOLOGY_FILE"; }
+# require_folder FOLDER -> exits 2 if no stage publishes the folder
+require_folder() {
+  list_folders | grep -qx "$1" || { vso_error "Unknown folder '$1' (see $TOPOLOGY_FILE)"; exit 2; }
 }
-# env_stages ENV -> stage names of an environment, in order
-env_stages() { ENV="$1" yq -r '.environments[strenv(ENV)].stages[].name' "$ENVIRONMENTS_FILE"; }
 # catalog_for PROJECT STAGE -> catalog name (project.yaml override wins over the pattern)
 catalog_for() {
   local project="$1" stage="$2" override=""

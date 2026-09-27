@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Stage 4 (git mode) over a change set produced by changeset.sh: one oasdiff run per environment,
-# each against that environment's own baseline (OUT_DIR/base.<env>).
+# Stage 4 (git mode) over a change set produced by changeset.sh: one oasdiff run per folder,
+# each against that folder's own baseline (OUT_DIR/base.<folder>).
 #
 #   validate-compat.sh OUT_DIR
 set -euo pipefail
@@ -9,10 +9,10 @@ DIR="${1:?OUT_DIR required}"
 rc=0; ran=0
 shopt -s nullglob
 for f in "$DIR"/products.*.txt; do
-  env="${f##*/products.}"; env="${env%.txt}"
+  folder="${f##*/products.}"; folder="${folder%.txt}"
   [[ -s "$f" ]] || continue
-  base=$(cat "$DIR/base.$env")
-  log "Environment '$env': baseline $base"
+  base=$(cat "$DIR/base.$folder")
+  log "Folder '$folder' (published by: $(folder_stages "$folder" | tr '\n' ' ')): baseline $base"
   ran=1
   "$(dirname "$0")/compat-check.sh" --mode git --base "$base" "$f" || rc=1
 done

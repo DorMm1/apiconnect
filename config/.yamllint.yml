@@ -16,6 +16,19 @@ rules:
     check-keys: false
   comments:
     min-spaces-from-content: 1
+  # Flow mappings/sequences are common in OpenAPI files ({ type: string }, [ok, degraded]); do not police spacing
+  braces:
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+    min-spaces-inside-empty: 0
+    max-spaces-inside-empty: 0
+  brackets:
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+  commas:
+    max-spaces-after: -1
+  colons:
+    max-spaces-after: -1
   # Hard errors that would break `apic validate` / the OAS parsers
   key-duplicates: enable
   quoted-strings: disable

@@ -11,7 +11,7 @@
 #   * Explicit, reviewed exceptions live in config/compat-ignore.txt (oasdiff --err-ignore format).
 #   * x-ibm-* extensions are ignored by oasdiff -> assembly/policy changes never count as contract changes.
 #
-# live mode needs APIC_SERVER/APIC_ORG of the stage's environment and an existing toolkit session.
+# live mode needs APIC_SERVER/APIC_ORG of the stage's instance and an existing toolkit session.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 require_cmd oasdiff yq jq realpath
@@ -30,7 +30,7 @@ LIST="${1:?products list file required}"
 
 case "$MODE" in
   git)  require_cmd git ;;
-  live) require_cmd apic; require_env APIC_SERVER APIC_ORG; [[ -n "$STAGE" ]] || { vso_error "--stage required in live mode"; exit 2; }; stage_env "$STAGE" >/dev/null ;;
+  live) require_cmd apic; require_env APIC_SERVER APIC_ORG; [[ -n "$STAGE" ]] || { vso_error "--stage required in live mode"; exit 2; }; require_stage "$STAGE" ;;
   *) vso_error "--mode must be git or live"; exit 2 ;;
 esac
 
@@ -82,8 +82,8 @@ for api in "${APIS[@]}"; do
   name=$(yq_str "$api" '.info["x-ibm-name"]'); ver=$(yq_str "$api" '.info.version')
   [[ -n "$name" && -n "$ver" ]] || { vso_error "info.x-ibm-name and info.version are required" "$api"; FAIL=1; continue; }
   major="${ver%%.*}"
-  project=$(path_project "$api"); env=$(path_env "$api")
-  base="out/compat/${project}.${env}.${name}.baseline.yaml"
+  project=$(path_project "$api"); folder=$(path_folder "$api")
+  base="out/compat/${project}.${folder}.${name}.baseline.yaml"
 
   if [[ "$MODE" == git ]]; then
     if ! baseline_git "$api" "$base"; then log "NEW  $api  (no baseline at $BASE) - skipped"; continue; fi
@@ -104,7 +104,7 @@ for api in "${APIS[@]}"; do
   log "oasdiff breaking  baseline=$baseline_label  revision=$api"
   rc=0
   oasdiff breaking "$base" "$api" -f text "${FAIL_ON[@]}" "${IGNORE_ARGS[@]}" | sed 's/^/    /' || rc=${PIPESTATUS[0]}
-  oasdiff breaking "$base" "$api" -f junit "${IGNORE_ARGS[@]}" > "out/compat/${project}.${env}.${name}.xml" 2>/dev/null || true
+  oasdiff breaking "$base" "$api" -f junit "${IGNORE_ARGS[@]}" > "out/compat/${project}.${folder}.${name}.xml" 2>/dev/null || true
 
   case $rc in
     0) log "OK   $name:$ver is backward compatible with $bver" ;;
