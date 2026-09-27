@@ -1,0 +1,8 @@
+# Stage 4 explicit exceptions for oasdiff `--err-ignore`.
+#
+# Add a line ONLY with a justification in the same PR. Lines starting with '#' and blank lines
+# are stripped before the file is handed to oasdiff.
+#
+# oasdiff matches each line (case-insensitive) against the breaking-change text, e.g.:
+#   GET /orders/{id} removed the required property 'legacyId' from the response
+# Keep entries as specific as possible (method + path + fragment of the message).

@@ -1,0 +1,100 @@
+# Stage 2 - OpenAPI 3.0 validity + APIC-specific lint rules (Spectral).
+# Severity "error" fails the pipeline (spectral --fail-severity error); "warn" is reported only.
+extends:
+  - [spectral:oas, recommended]
+
+rules:
+  # --- Tuned built-ins -------------------------------------------------------
+  # APIC OAS3 derives the gateway base path from servers[0].url; keep the check on.
+  oas3-api-servers: error
+  # Contact/license blocks are not required for internal APIs.
+  info-contact: 'off'
+  info-license: 'off'
+  license-url: 'off'
+  # Operation tags are useful for the Developer Portal but not mandatory.
+  operation-tags: warn
+  operation-tag-defined: warn
+  # Breaks on legitimately empty descriptions in many generated specs; keep as warning.
+  operation-description: warn
+
+  # --- APIC requirements -----------------------------------------------------
+  apic-x-ibm-name:
+    description: APIC identifies an API by info.x-ibm-name; it is mandatory and must be a lowercase slug.
+    severity: error
+    given: $.info
+    then:
+      - field: x-ibm-name
+        function: truthy
+      - field: x-ibm-name
+        function: pattern
+        functionOptions:
+          match: '^[a-z0-9][a-z0-9-]*$'
+
+  apic-semver-version:
+    description: info.version must be strict semver (MAJOR.MINOR.PATCH); the compatibility gate relies on the MAJOR component.
+    severity: error
+    given: $.info.version
+    then:
+      function: pattern
+      functionOptions:
+        match: '^\d+\.\d+\.\d+$'
+
+  apic-x-ibm-configuration-present:
+    description: Every API must carry an x-ibm-configuration block (assembly, enforcement, properties).
+    severity: error
+    given: $
+    then:
+      field: x-ibm-configuration
+      function: truthy
+
+  apic-enforced-defined:
+    description: x-ibm-configuration.enforced must be set explicitly (true = enforced on the gateway).
+    severity: error
+    given: $.x-ibm-configuration
+    then:
+      field: enforced
+      function: defined
+
+  apic-gateway-is-api-gateway:
+    description: Only the DataPower API Gateway is supported in this repository.
+    severity: error
+    given: $.x-ibm-configuration.gateway
+    then:
+      function: enumeration
+      functionOptions:
+        values: [datapower-api-gateway]
+
+  apic-assembly-present:
+    description: Enforced APIs must define an assembly (x-ibm-configuration.assembly.execute).
+    severity: error
+    given: $.x-ibm-configuration[?(@.enforced == true)]
+    then:
+      field: assembly.execute
+      function: truthy
+
+  apic-single-server:
+    description: The DataPower API Gateway supports a single servers[] entry (its path becomes the base path).
+    severity: error
+    given: $.servers
+    then:
+      function: length
+      functionOptions:
+        max: 1
+
+  apic-no-callbacks-or-links:
+    description: OpenAPI callbacks and links are not supported by the DataPower API Gateway.
+    severity: error
+    given: $.paths[*][*]
+    then:
+      - field: callbacks
+        function: undefined
+      - field: responses[*].links
+        function: undefined
+
+  apic-security-defined:
+    description: APIs should declare security (client id / OAuth); document intentionally open APIs with security [].
+    severity: warn
+    given: $
+    then:
+      field: security
+      function: defined

@@ -1,0 +1,31 @@
+product: 1.0.0
+info:
+  name: example-product
+  title: Example Product
+  version: 1.0.0
+  description: Sample product bundling the example API. Replace or delete together with the API.
+gateways:
+  - datapower-api-gateway
+visibility:
+  view:
+    type: public
+    orgs: []
+    tags: []
+    enabled: true
+  subscribe:
+    type: authenticated
+    orgs: []
+    tags: []
+    enabled: true
+apis:
+  # Repository policy: APIs are referenced ONLY by relative $ref into ../apis/ (checked in stage 3).
+  example-api:
+    $ref: ../apis/example-api.yaml
+plans:
+  default-plan:
+    title: Default Plan
+    description: Default plan with a modest rate limit.
+    approval: false
+    rate-limits:
+      default:
+        value: 100/1hour

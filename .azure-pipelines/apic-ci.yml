@@ -1,0 +1,120 @@
+# APIConnect-catalog - GitOps pipeline for IBM API Connect 10.0.8.x (SaaS), Azure DevOps.
+#
+#   Pull request -> main : Validate only (stages 1-4). No call writes to APIC.
+#   Push to main         : Validate, then publish changed products to dev -> test -> prod.
+#                          test/prod wait for the approvals configured on Environments apic-test / apic-prod.
+#
+# Required Azure DevOps setup (see README "Azure DevOps setup"):
+#   Variable group  apic-shared : APIC_SERVER, APIC_ORG, APIC_TOOLKIT_VERSION
+#   Variable groups apic-dev / apic-test / apic-prod : APIC_APIKEY (secret, Key Vault-linked)
+#   Secure file     apic-toolkit-credentials.json
+#   Environments    apic-dev, apic-test, apic-prod (approvals + exclusive lock on test/prod)
+#   Artifacts feed  platform-tools with Universal Package apic-toolkit (or a self-hosted agent with apic on PATH)
+
+trigger:
+  branches:
+    include: [main]
+  paths:
+    include: [projects/**, config/**, scripts/**, .azure-pipelines/**]
+
+# `pr:` applies to GitHub-hosted repos. For Azure Repos, add a branch policy "Build validation" on main instead.
+pr:
+  branches:
+    include: [main]
+  paths:
+    include: [projects/**, config/**, scripts/**, .azure-pipelines/**]
+
+variables:
+- group: apic-shared
+
+stages:
+- stage: validate
+  displayName: Validate (stages 1-4)
+  jobs:
+  - job: validate
+    displayName: yaml -> openapi -> apic -> compatibility
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - checkout: self
+      fetchDepth: 0                       # full history: needed to diff against the target branch / tags
+
+    - template: templates/install-tools.yml
+
+    - bash: |
+        set -euo pipefail
+        if [[ "$BUILD_REASON" == "PullRequest" ]]; then
+          TB="${SYSTEM_PULLREQUEST_TARGETBRANCH#refs/heads/}"
+          git fetch origin "+refs/heads/${TB}:refs/remotes/origin/${TB}"
+          BASE="origin/${TB}"
+          echo "PR build: comparing with ${BASE}"
+        else
+          git fetch origin '+refs/tags/published/dev:refs/tags/published/dev' 2>/dev/null || true
+          if BASE=$(git rev-parse -q --verify 'refs/tags/published/dev^{commit}'); then
+            echo "main build: comparing with last publish to dev (${BASE})"
+          else
+            BASE=$(git hash-object -t tree /dev/null)
+            echo "main build: no published/dev tag yet, validating every product"
+          fi
+        fi
+        scripts/changed-products.sh "$BASE" HEAD "$(Pipeline.Workspace)/products.txt"
+        scripts/product-apis.sh --list "$(Pipeline.Workspace)/products.txt" > "$(Pipeline.Workspace)/apis.txt"
+        echo "##vso[task.setvariable variable=BASE]$BASE"
+        if [[ -s "$(Pipeline.Workspace)/products.txt" ]]; then
+          echo "##vso[task.setvariable variable=HAS_CHANGES]true"
+        else
+          echo "##vso[task.setvariable variable=HAS_CHANGES]false"
+          echo "##vso[task.logissue type=warning]No API/product changes detected - validation stages skipped"
+        fi
+      displayName: '0 · Change set'
+
+    - bash: scripts/validate-yaml.sh "$(Pipeline.Workspace)/products.txt" "$(Pipeline.Workspace)/apis.txt"
+      displayName: '1 · YAML syntax (yamllint)'
+      condition: and(succeeded(), eq(variables['HAS_CHANGES'], 'true'))
+
+    - bash: scripts/validate-oas.sh "$(Pipeline.Workspace)/apis.txt"
+      displayName: '2 · OpenAPI 3.0 validity (spectral)'
+      condition: and(succeeded(), eq(variables['HAS_CHANGES'], 'true'))
+
+    - bash: scripts/validate-apic.sh "$(Pipeline.Workspace)/products.txt"
+      displayName: '3 · APIC validity (apic validate)'
+      condition: and(succeeded(), eq(variables['HAS_CHANGES'], 'true'))
+
+    - bash: scripts/compat-check.sh --mode git --base "$(BASE)" "$(Pipeline.Workspace)/products.txt"
+      displayName: '4 · Backward compatibility (oasdiff)'
+      condition: and(succeeded(), eq(variables['HAS_CHANGES'], 'true'))
+
+    - task: PublishTestResults@2
+      displayName: Publish lint/compat results
+      condition: always()
+      inputs:
+        testResultsFormat: JUnit
+        testResultsFiles: 'out/**/*.xml'
+        failTaskOnFailedTests: false
+        testRunTitle: apic-validation
+
+    - publish: $(Pipeline.Workspace)/products.txt
+      artifact: change-set
+      displayName: Publish change set
+      condition: always()
+
+- template: templates/publish-stage.yml
+  parameters:
+    env: dev
+    catalog: dev
+    dependsOn: validate
+    variableGroup: apic-dev
+
+- template: templates/publish-stage.yml
+  parameters:
+    env: test
+    catalog: test
+    dependsOn: publish_dev
+    variableGroup: apic-test
+
+- template: templates/publish-stage.yml
+  parameters:
+    env: prod
+    catalog: prod
+    dependsOn: publish_test
+    variableGroup: apic-prod

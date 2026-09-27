@@ -1,0 +1,70 @@
+# Installs the tools used by scripts/*.sh on an ubuntu-latest agent.
+#
+# apic toolkit: for API Connect SaaS the CLI is downloaded from your tenant (API Manager -> "Tools for
+# download"), it is not on a public URL. Upload it once as a Universal Package to Azure Artifacts:
+#   az artifacts universal publish --organization <org-url> --feed platform-tools --name apic-toolkit \
+#      --version 10.0.8.9 --path ./toolkit-dir      (toolkit-dir contains the linux `apic` binary)
+# On a self-hosted agent with `apic` already on PATH the download is skipped.
+parameters:
+- name: apicFeed
+  type: string
+  default: platform-tools
+- name: apicPackage
+  type: string
+  default: apic-toolkit
+
+steps:
+- task: UsePythonVersion@0
+  displayName: 'tools: python'
+  inputs:
+    versionSpec: '3.x'
+
+- task: NodeTool@0
+  displayName: 'tools: node'
+  inputs:
+    versionSpec: '20.x'
+
+- bash: |
+    set -euo pipefail
+    pip install --quiet 'yamllint==1.*'
+    npm install -g --silent '@stoplight/spectral-cli@6'
+    # Pin the versions below to the ones you validated; bump deliberately.
+    YQ_VERSION=v4.53.6
+    OASDIFF_VERSION=1.32.1
+    sudo curl -fsSL -o /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+    sudo chmod +x /usr/local/bin/yq
+    curl -fsSL "https://github.com/oasdiff/oasdiff/releases/download/v${OASDIFF_VERSION}/oasdiff_${OASDIFF_VERSION}_linux_amd64.tar.gz" \
+      | sudo tar -xz -C /usr/local/bin oasdiff
+    sudo apt-get install -y -qq jq >/dev/null 2>&1 || true   # jq is preinstalled on hosted agents; no-op there
+    chmod +x scripts/*.sh
+    echo "yamllint $(yamllint --version | cut -d' ' -f2) | spectral $(spectral --version) | yq $(yq --version | awk '{print $NF}') | oasdiff $(oasdiff --version | awk '{print $NF}')"
+  displayName: 'tools: yamllint / spectral / yq / oasdiff'
+
+- bash: |
+    if command -v apic >/dev/null 2>&1; then
+      echo "apic already on PATH: $(command -v apic)"
+      echo "##vso[task.setvariable variable=APIC_PRESENT]true"
+    else
+      echo "##vso[task.setvariable variable=APIC_PRESENT]false"
+    fi
+  displayName: 'tools: detect apic'
+
+- task: UniversalPackages@0
+  displayName: 'tools: download apic toolkit $(APIC_TOOLKIT_VERSION)'
+  condition: and(succeeded(), ne(variables['APIC_PRESENT'], 'true'))
+  inputs:
+    command: download
+    vstsFeed: ${{ parameters.apicFeed }}
+    vstsFeedPackage: ${{ parameters.apicPackage }}
+    vstsPackageVersion: $(APIC_TOOLKIT_VERSION)
+    downloadDirectory: $(Agent.ToolsDirectory)/apic
+
+- bash: |
+    set -euo pipefail
+    if [[ "$(APIC_PRESENT)" != "true" ]]; then
+      chmod +x "$(Agent.ToolsDirectory)/apic/apic"
+      echo "##vso[task.prependpath]$(Agent.ToolsDirectory)/apic"
+      export PATH="$(Agent.ToolsDirectory)/apic:$PATH"
+    fi
+    apic --accept-license version
+  displayName: 'tools: apic on PATH'

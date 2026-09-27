@@ -1,0 +1,20 @@
+# Pipeline / script outputs
+out/
+*.log
+
+# Local tooling
+node_modules/
+.venv/
+venv/
+
+# Toolkit state and credentials must never be committed
+.apiconnect/
+credentials.json
+designer_credentials.json
+*.netrc
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

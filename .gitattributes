@@ -1,0 +1,7 @@
+# Pipeline scripts run on Linux agents: always LF, always executable in the index.
+* text=auto eol=lf
+*.sh   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.md   text eol=lf
+*.txt  text eol=lf

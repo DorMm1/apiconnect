@@ -1,0 +1,118 @@
+# One deployment stage = one APIC catalog. Instantiated three times from apic-ci.yml (dev -> test -> prod).
+#
+# Approvals, exclusive lock and any other gates are configured on the Azure DevOps *Environment*
+# named apic-<env> (Pipelines -> Environments), not in this file.
+#
+# What is published: the products whose files changed since the `published/<env>` git tag, i.e. since the
+# last successful publish to THIS catalog. Missing tag (bootstrap) => every product in the repository.
+parameters:
+- name: env            # dev | test | prod  (Environment name suffix and tag suffix)
+  type: string
+- name: catalog        # APIC catalog name in the provider org
+  type: string
+- name: dependsOn
+  type: string
+- name: variableGroup  # per-environment variable group holding APIC_APIKEY (Key Vault-linked)
+  type: string
+
+stages:
+- stage: publish_${{ parameters.env }}
+  displayName: Publish -> ${{ parameters.catalog }}
+  dependsOn: ${{ parameters.dependsOn }}
+  # Never publish from a PR build or from any branch other than main
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'), ne(variables['Build.Reason'], 'PullRequest'))
+  variables:
+  - group: ${{ parameters.variableGroup }}
+  jobs:
+  - deployment: publish
+    displayName: apic products:publish
+    environment: apic-${{ parameters.env }}
+    pool:
+      vmImage: ubuntu-latest
+    workspace:
+      clean: all
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+            fetchDepth: 0
+            persistCredentials: true          # required to push the published/<env> tag
+
+          - template: install-tools.yml
+
+          - task: DownloadSecureFile@1
+            name: apicCreds
+            displayName: Toolkit credentials.json (Secure File)
+            inputs:
+              secureFile: apic-toolkit-credentials.json
+
+          - bash: |
+              set -euo pipefail
+              apic client-creds:set "$(apicCreds.secureFilePath)"
+              # API Connect SaaS non-interactive login with an IBM Cloud IAM API key (v10.0.8 CLI: `apic iam-apikey`).
+              # VERIFY on your tenant. Alternative for IBMid/OIDC-only tenants:
+              #   apic login --server "$APIC_SERVER" --sso --context provider --apiKey "$APIC_APIKEY"
+              apic iam-apikey --server "$APIC_SERVER" --apiKey "$APIC_APIKEY"
+              # Smoke-test the session with a read-only call (also proves the org name is right)
+              apic catalogs:list --server "$APIC_SERVER" --org "$APIC_ORG" --fields name --format yaml --output -
+            displayName: apic login
+            env:
+              APIC_ORG: $(APIC_ORG)
+              APIC_SERVER: $(APIC_SERVER)
+              APIC_APIKEY: $(APIC_APIKEY)       # secret: only ever passed through env
+
+          - bash: |
+              set -euo pipefail
+              TAG="published/${{ parameters.env }}"
+              git fetch origin "+refs/tags/${TAG}:refs/tags/${TAG}" 2>/dev/null || true
+              if BASE=$(git rev-parse -q --verify "refs/tags/${TAG}^{commit}"); then
+                echo "Last publish to ${{ parameters.catalog }}: $BASE"
+              else
+                BASE=$(git hash-object -t tree /dev/null)
+                echo "##vso[task.logissue type=warning]No tag ${TAG} yet: bootstrapping - every product will be published to ${{ parameters.catalog }}"
+              fi
+              scripts/changed-products.sh "$BASE" HEAD "$(Pipeline.Workspace)/products.txt"
+            displayName: Change set since published/${{ parameters.env }}
+
+          - bash: scripts/compat-check.sh --mode live --catalog "${{ parameters.catalog }}" "$(Pipeline.Workspace)/products.txt"
+            displayName: "4' Compatibility vs live catalog"
+            env:
+              APIC_SERVER: $(APIC_SERVER)
+              APIC_ORG: $(APIC_ORG)
+
+          - bash: scripts/publish.sh --catalog "${{ parameters.catalog }}" "$(Pipeline.Workspace)/products.txt"
+            displayName: apic products:publish
+            env:
+              APIC_SERVER: $(APIC_SERVER)
+              APIC_ORG: $(APIC_ORG)
+
+          - bash: |
+              set -euo pipefail
+              TAG="published/${{ parameters.env }}"
+              git config user.email "apic-pipeline@noreply.local"
+              git config user.name  "apic-pipeline"
+              git tag -f "$TAG" HEAD
+              git push --force origin "refs/tags/${TAG}"
+              echo "Moved $TAG -> $(git rev-parse --short HEAD)"
+            displayName: Mark published/${{ parameters.env }}
+
+          - task: PublishTestResults@2
+            displayName: Publish compat results
+            condition: always()
+            inputs:
+              testResultsFormat: JUnit
+              testResultsFiles: 'out/compat/*.xml'
+              failTaskOnFailedTests: false
+              testRunTitle: 'compat-live-${{ parameters.env }}'
+
+          - publish: out
+            artifact: publish-${{ parameters.env }}-$(Build.BuildId)
+            displayName: Publish logs artifact
+            condition: always()
+
+          - bash: apic logout --server "$APIC_SERVER" || true
+            displayName: apic logout
+            condition: always()
+            env:
+              APIC_SERVER: $(APIC_SERVER)
