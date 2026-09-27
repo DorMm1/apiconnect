@@ -1,4 +1,4 @@
-# Pipeline / script outputs
+﻿# Pipeline / script outputs
 out/
 *.log
 
@@ -18,3 +18,6 @@ designer_credentials.json
 Thumbs.db
 .vscode/
 .idea/
+
+# Offline bundles built from this repo (large binaries)
+dist/
