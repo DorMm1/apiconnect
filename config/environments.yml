@@ -1,0 +1,38 @@
+# Environments and publish stages - the single source of truth for scripts/*.sh.
+#
+# environment = one API Connect INSTANCE (own cluster, own management endpoint, own credentials).
+#               Credentials come from the Azure DevOps variable group `apic-<env>` (APIC_SERVER, APIC_ORG, APIC_APIKEY)
+#               and the Secure File `apic-toolkit-credentials-<env>.json`.
+#               The repository folder projects/<project>/<env>/ holds what that instance should have.
+# stage       = one catalog per project inside an instance. Stages of the same environment receive the SAME files,
+#               in order; the Azure DevOps Environment `apic-<stage>` carries the approval gate.
+#               The git tag `published/<stage>` marks the last commit published to that stage.
+# catalog     = pattern; {project} is the project folder name. A project can override a name in
+#               projects/<project>/project.yaml  ->  catalogs: { <stage>: <catalog-name> }.
+#
+# The stage list in .azure-pipelines/apic-ci.yml must mirror this file (Azure Pipelines cannot read it at compile time).
+environments:
+  dev:
+    description: Development instance
+    stages:
+      - name: dev
+        catalog: "{project}-dev"
+        gate: automatic on merge to main
+      - name: integ
+        catalog: "{project}-integ"
+        gate: approval
+  test:
+    description: Test instance
+    stages:
+      - name: nightly
+        catalog: "{project}-nightly"
+        gate: automatic (optionally scheduled)
+      - name: rc
+        catalog: "{project}-rc"
+        gate: approval
+  prod:
+    description: Production instance
+    stages:
+      - name: prod
+        catalog: "{project}"
+        gate: approval

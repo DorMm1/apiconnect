@@ -1,11 +1,12 @@
 openapi: 3.0.3
 info:
   title: Example API
-  version: 1.0.0
+  version: 1.1.0
   x-ibm-name: example-api
   description: >-
     Sample API used to bootstrap and test the GitOps pipeline. Replace it with your
     first real API or delete the whole example-project folder.
+    1.1.0 adds GET /ping and the optional Health.region field (non-breaking).
 servers:
   # APIC OAS3: the path of the single servers[] entry becomes the gateway base path.
   - url: /example
@@ -29,6 +30,16 @@ paths:
           description: Missing or invalid client id
         '500':
           description: Backend failure
+  /ping:
+    get:
+      operationId: ping
+      summary: Liveness probe (added in 1.1.0)
+      tags: [Health]
+      responses:
+        '200':
+          description: OK
+        '401':
+          description: Missing or invalid client id
 components:
   schemas:
     Health:
@@ -41,6 +52,9 @@ components:
         checkedAt:
           type: string
           format: date-time
+        region:
+          type: string
+          description: Region the backend answered from (added in 1.1.0)
   securitySchemes:
     clientIdHeader:
       type: apiKey
@@ -57,17 +71,27 @@ x-ibm-configuration:
   cors:
     enabled: true
   properties:
-    # Default value is used by the dev catalog; per-catalog overrides below.
+    # Default value; overridden per catalog below so the SAME file can be promoted unchanged
+    # from dev/ to test/ to prod/. Keys are the catalog names of this project on every instance.
     target-url:
       value: https://example-dev.internal.example.com
       description: Backend base URL
       encoded: false
   catalogs:
     # VERIFY on your tenant: catalog-specific property values (x-ibm-configuration.catalogs.<catalog>.properties)
-    test:
+    example-project-dev:
       properties:
-        target-url: https://example-test.internal.example.com
-    prod:
+        target-url: https://example-dev.internal.example.com
+    example-project-integ:
+      properties:
+        target-url: https://example-integ.internal.example.com
+    example-project-nightly:
+      properties:
+        target-url: https://example-nightly.internal.example.com
+    example-project-rc:
+      properties:
+        target-url: https://example-rc.internal.example.com
+    example-project:
       properties:
         target-url: https://example.internal.example.com
   activity-log:

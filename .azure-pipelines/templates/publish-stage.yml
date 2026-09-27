@@ -1,34 +1,58 @@
-# One deployment stage = one APIC catalog. Instantiated three times from apic-ci.yml (dev -> test -> prod).
+# One deployment stage = one publish stage = one catalog per project on one API Connect instance.
+# Instantiated five times from apic-ci.yml: dev, integ (dev instance) / nightly, rc (test instance) / prod.
 #
-# Approvals, exclusive lock and any other gates are configured on the Azure DevOps *Environment*
-# named apic-<env> (Pipelines -> Environments), not in this file.
+# Approvals, exclusive lock and other gates are configured on the Azure DevOps *Environment* apic-<stage>.
+# Credentials of the INSTANCE come from the variable group apic-<env> and the Secure File
+# apic-toolkit-credentials-<env>.json (each instance has its own management endpoint and toolkit credentials).
 #
-# What is published: the products whose files changed since the `published/<env>` git tag, i.e. since the
-# last successful publish to THIS catalog. Missing tag (bootstrap) => every product in the repository.
+# What is published: the products under projects/*/<env>/ whose files changed since the git tag published/<stage>,
+# i.e. since the last successful publish to THIS stage. Missing tag (bootstrap) => every product of the environment.
+# The stage is skipped entirely when the validate stage found nothing new for it, so approvers are never asked
+# to approve an empty publish.
 parameters:
-- name: env            # dev | test | prod  (Environment name suffix and tag suffix)
+- name: env             # dev | test | prod  -> folder projects/*/<env>/, variable group apic-<env>, secure file
   type: string
-- name: catalog        # APIC catalog name in the provider org
+- name: stage           # dev | integ | nightly | rc | prod -> Environment apic-<stage>, tag published/<stage>
+  type: string
+- name: catalog         # display only; the real name comes from config/environments.yml / project.yaml
   type: string
 - name: dependsOn
+  type: object
+- name: previousStage   # stage that must have succeeded or been skipped first ('' for the first stage of an instance)
   type: string
-- name: variableGroup  # per-environment variable group holding APIC_APIKEY (Key Vault-linked)
-  type: string
+  default: ''
 
 stages:
-- stage: publish_${{ parameters.env }}
-  displayName: Publish -> ${{ parameters.catalog }}
+- stage: publish_${{ parameters.stage }}
+  displayName: Publish ${{ parameters.stage }} -> ${{ parameters.catalog }} (${{ parameters.env }} instance)
   dependsOn: ${{ parameters.dependsOn }}
-  # Never publish from a PR build or from any branch other than main
-  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'), ne(variables['Build.Reason'], 'PullRequest'))
+  # Only from main, never from a PR, only when this stage has unpublished changes, and (for the second catalog of an
+  # instance) only after the first catalog's stage succeeded or was skipped.
+  ${{ if eq(parameters.previousStage, '') }}:
+    condition: >-
+      and(
+        eq(variables['Build.SourceBranch'], 'refs/heads/main'),
+        ne(variables['Build.Reason'], 'PullRequest'),
+        eq(dependencies.validate.result, 'Succeeded'),
+        eq(dependencies.validate.outputs['validate.changes.${{ parameters.stage }}'], 'true')
+      )
+  ${{ else }}:
+    condition: >-
+      and(
+        eq(variables['Build.SourceBranch'], 'refs/heads/main'),
+        ne(variables['Build.Reason'], 'PullRequest'),
+        eq(dependencies.validate.result, 'Succeeded'),
+        in(dependencies.${{ parameters.previousStage }}.result, 'Succeeded', 'Skipped'),
+        eq(dependencies.validate.outputs['validate.changes.${{ parameters.stage }}'], 'true')
+      )
   variables:
-  - group: ${{ parameters.variableGroup }}
+  - group: apic-${{ parameters.env }}
   jobs:
   - deployment: publish
     displayName: apic products:publish
-    environment: apic-${{ parameters.env }}
+    environment: apic-${{ parameters.stage }}
     pool:
-      vmImage: ubuntu-latest
+      vmImage: ubuntu-latest          # on-prem: replace with  name: <your agent pool>
     workspace:
       clean: all
     strategy:
@@ -37,51 +61,41 @@ stages:
           steps:
           - checkout: self
             fetchDepth: 0
-            persistCredentials: true          # required to push the published/<env> tag
+            persistCredentials: true          # required to push the published/<stage> tag
 
           - template: install-tools.yml
 
           - task: DownloadSecureFile@1
             name: apicCreds
-            displayName: Toolkit credentials.json (Secure File)
+            displayName: Toolkit credentials.json of the ${{ parameters.env }} instance
             inputs:
-              secureFile: apic-toolkit-credentials.json
+              secureFile: apic-toolkit-credentials-${{ parameters.env }}.json
 
           - bash: |
               set -euo pipefail
               apic client-creds:set "$(apicCreds.secureFilePath)"
-              # API Connect SaaS non-interactive login with an IBM Cloud IAM API key (v10.0.8 CLI: `apic iam-apikey`).
-              # VERIFY on your tenant. Alternative for IBMid/OIDC-only tenants:
+              # Non-interactive login with an IBM Cloud IAM API key (v10.0.8 CLI: `apic iam-apikey`).
+              # VERIFY on each instance. Alternative for IBMid/OIDC-only instances:
               #   apic login --server "$APIC_SERVER" --sso --context provider --apiKey "$APIC_APIKEY"
               apic iam-apikey --server "$APIC_SERVER" --apiKey "$APIC_APIKEY"
-              # Smoke-test the session with a read-only call (also proves the org name is right)
+              # Smoke-test the session with a read-only call (also proves org and instance are right)
               apic catalogs:list --server "$APIC_SERVER" --org "$APIC_ORG" --fields name --format yaml --output -
-            displayName: apic login
+            displayName: apic login (${{ parameters.env }} instance)
             env:
               APIC_ORG: $(APIC_ORG)
               APIC_SERVER: $(APIC_SERVER)
               APIC_APIKEY: $(APIC_APIKEY)       # secret: only ever passed through env
 
-          - bash: |
-              set -euo pipefail
-              TAG="published/${{ parameters.env }}"
-              git fetch origin "+refs/tags/${TAG}:refs/tags/${TAG}" 2>/dev/null || true
-              if BASE=$(git rev-parse -q --verify "refs/tags/${TAG}^{commit}"); then
-                echo "Last publish to ${{ parameters.catalog }}: $BASE"
-              else
-                BASE=$(git hash-object -t tree /dev/null)
-                echo "##vso[task.logissue type=warning]No tag ${TAG} yet: bootstrapping - every product will be published to ${{ parameters.catalog }}"
-              fi
-              scripts/changed-products.sh "$BASE" HEAD "$(Pipeline.Workspace)/products.txt"
-            displayName: Change set since published/${{ parameters.env }}
+          - bash: scripts/changeset.sh --mode stage --stage "${{ parameters.stage }}" out/cs
+            displayName: Change set since published/${{ parameters.stage }}
 
-          - bash: scripts/compat-check.sh --mode live --catalog "${{ parameters.catalog }}" "$(Pipeline.Workspace)/products.txt"
-            displayName: "4' Compatibility vs live catalog"
+          - bash: scripts/compat-check.sh --mode live --stage "${{ parameters.stage }}" out/cs/products.txt
+            displayName: "4' Compatibility vs live catalogs"
             env:
               APIC_SERVER: $(APIC_SERVER)
               APIC_ORG: $(APIC_ORG)
 
-          - bash: scripts/publish.sh --catalog "${{ parameters.catalog }}" "$(Pipeline.Workspace)/products.txt"
+          - bash: scripts/publish.sh --stage "${{ parameters.stage }}" out/cs/products.txt
             displayName: apic products:publish
             env:
               APIC_SERVER: $(APIC_SERVER)
@@ -89,13 +103,13 @@ stages:
 
           - bash: |
               set -euo pipefail
-              TAG="published/${{ parameters.env }}"
+              TAG="published/${{ parameters.stage }}"
               git config user.email "apic-pipeline@noreply.local"
               git config user.name  "apic-pipeline"
               git tag -f "$TAG" HEAD
               git push --force origin "refs/tags/${TAG}"
               echo "Moved $TAG -> $(git rev-parse --short HEAD)"
-            displayName: Mark published/${{ parameters.env }}
+            displayName: Mark published/${{ parameters.stage }}
 
           - task: PublishTestResults@2
             displayName: Publish compat results
@@ -104,10 +118,10 @@ stages:
               testResultsFormat: JUnit
               testResultsFiles: 'out/compat/*.xml'
               failTaskOnFailedTests: false
-              testRunTitle: 'compat-live-${{ parameters.env }}'
+              testRunTitle: 'compat-live-${{ parameters.stage }}'
 
           - publish: out
-            artifact: publish-${{ parameters.env }}-$(Build.BuildId)
+            artifact: publish-${{ parameters.stage }}-$(Build.BuildId)
             displayName: Publish logs artifact
             condition: always()
 

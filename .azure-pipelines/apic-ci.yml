@@ -1,15 +1,25 @@
-# APIConnect-catalog - GitOps pipeline for IBM API Connect 10.0.8.x (SaaS), Azure DevOps.
+# APIConnect-catalog - GitOps pipeline for IBM API Connect 10.0.8.x, Azure DevOps.
 #
-#   Pull request -> main : Validate only (stages 1-4). No call writes to APIC.
-#   Push to main         : Validate, then publish changed products to dev -> test -> prod.
-#                          test/prod wait for the approvals configured on Environments apic-test / apic-prod.
+# Topology (config/environments.yml): three API Connect INSTANCES, each with its own endpoint and credentials,
+# and per project the catalogs
+#     dev  instance : <project>-dev      -> <project>-integ
+#     test instance : <project>-nightly  -> <project>-rc
+#     prod instance : <project>
+# Repository folder projects/<project>/<env>/ holds what the <env> instance should have. Both catalogs of an
+# instance receive the SAME files, in order, the second one behind an approval gate.
 #
-# Required Azure DevOps setup (see README "Azure DevOps setup"):
-#   Variable group  apic-shared : APIC_SERVER, APIC_ORG, APIC_TOOLKIT_VERSION
-#   Variable groups apic-dev / apic-test / apic-prod : APIC_APIKEY (secret, Key Vault-linked)
-#   Secure file     apic-toolkit-credentials.json
-#   Environments    apic-dev, apic-test, apic-prod (approvals + exclusive lock on test/prod)
-#   Artifacts feed  platform-tools with Universal Package apic-toolkit (or a self-hosted agent with apic on PATH)
+#   Pull request -> main : Validate only (stages 1-4) for every environment folder touched. No call writes to APIC.
+#   Push to main         : Validate, then three independent publish chains, each stage skipped when its
+#                          environment folder has nothing new since the tag published/<stage>:
+#                              publish_dev -> publish_integ        (dev instance)
+#                              publish_nightly -> publish_rc       (test instance)
+#                              publish_prod                        (prod instance)
+#
+# Required Azure DevOps setup (README "Azure DevOps setup"):
+#   Variable group  apic-shared              : APIC_TOOLKIT_VERSION, TOOLS_MODE (online|offline)
+#   Variable groups apic-dev / apic-test / apic-prod : APIC_SERVER, APIC_ORG (plain), APIC_APIKEY (secret, Key Vault)
+#   Secure files    apic-toolkit-credentials-dev.json / -test.json / -prod.json
+#   Environments    apic-dev, apic-integ, apic-nightly, apic-rc, apic-prod (approvals + exclusive lock where wanted)
 
 trigger:
   branches:
@@ -28,60 +38,58 @@ variables:
 - group: apic-shared
 
 stages:
+# --------------------------------------------------------------------------------------------- validate
 - stage: validate
   displayName: Validate (stages 1-4)
   jobs:
   - job: validate
     displayName: yaml -> openapi -> apic -> compatibility
     pool:
-      vmImage: ubuntu-latest
+      vmImage: ubuntu-latest          # on-prem: replace with  name: <your agent pool>
     steps:
     - checkout: self
-      fetchDepth: 0                       # full history: needed to diff against the target branch / tags
+      fetchDepth: 0                   # full history: needed to diff against the target branch / tags
 
     - template: templates/install-tools.yml
 
     - bash: |
         set -euo pipefail
+        git fetch -q origin '+refs/tags/published/*:refs/tags/published/*' 2>/dev/null || true
         if [[ "$BUILD_REASON" == "PullRequest" ]]; then
           TB="${SYSTEM_PULLREQUEST_TARGETBRANCH#refs/heads/}"
-          git fetch origin "+refs/heads/${TB}:refs/remotes/origin/${TB}"
-          BASE="origin/${TB}"
-          echo "PR build: comparing with ${BASE}"
+          git fetch -q origin "+refs/heads/${TB}:refs/remotes/origin/${TB}"
+          scripts/changeset.sh --mode pr --base "origin/${TB}" out/cs
+          # PR builds never publish: report every stage as "no changes"
+          for s in dev integ nightly rc prod; do echo "##vso[task.setvariable variable=${s};isOutput=true]false"; done
         else
-          git fetch origin '+refs/tags/published/dev:refs/tags/published/dev' 2>/dev/null || true
-          if BASE=$(git rev-parse -q --verify 'refs/tags/published/dev^{commit}'); then
-            echo "main build: comparing with last publish to dev (${BASE})"
-          else
-            BASE=$(git hash-object -t tree /dev/null)
-            echo "main build: no published/dev tag yet, validating every product"
-          fi
+          scripts/changeset.sh --mode main out/cs
+          while read -r stage flag; do
+            echo "##vso[task.setvariable variable=${stage};isOutput=true]${flag}"
+          done < out/cs/stages.txt
         fi
-        scripts/changed-products.sh "$BASE" HEAD "$(Pipeline.Workspace)/products.txt"
-        scripts/product-apis.sh --list "$(Pipeline.Workspace)/products.txt" > "$(Pipeline.Workspace)/apis.txt"
-        echo "##vso[task.setvariable variable=BASE]$BASE"
-        if [[ -s "$(Pipeline.Workspace)/products.txt" ]]; then
+        if [[ -s out/cs/products.txt ]]; then
           echo "##vso[task.setvariable variable=HAS_CHANGES]true"
         else
           echo "##vso[task.setvariable variable=HAS_CHANGES]false"
           echo "##vso[task.logissue type=warning]No API/product changes detected - validation stages skipped"
         fi
-      displayName: '0 · Change set'
+      name: changes
+      displayName: '0 · Change set per environment'
 
-    - bash: scripts/validate-yaml.sh "$(Pipeline.Workspace)/products.txt" "$(Pipeline.Workspace)/apis.txt"
+    - bash: scripts/validate-yaml.sh out/cs/products.txt out/cs/apis.txt
       displayName: '1 · YAML syntax (yamllint)'
       condition: and(succeeded(), eq(variables['HAS_CHANGES'], 'true'))
 
-    - bash: scripts/validate-oas.sh "$(Pipeline.Workspace)/apis.txt"
+    - bash: scripts/validate-oas.sh out/cs/apis.txt
       displayName: '2 · OpenAPI 3.0 validity (spectral)'
       condition: and(succeeded(), eq(variables['HAS_CHANGES'], 'true'))
 
-    - bash: scripts/validate-apic.sh "$(Pipeline.Workspace)/products.txt"
+    - bash: scripts/validate-apic.sh out/cs/products.txt
       displayName: '3 · APIC validity (apic validate)'
       condition: and(succeeded(), eq(variables['HAS_CHANGES'], 'true'))
 
-    - bash: scripts/compat-check.sh --mode git --base "$(BASE)" "$(Pipeline.Workspace)/products.txt"
-      displayName: '4 · Backward compatibility (oasdiff)'
+    - bash: scripts/validate-compat.sh out/cs
+      displayName: '4 · Backward compatibility per environment (oasdiff)'
       condition: and(succeeded(), eq(variables['HAS_CHANGES'], 'true'))
 
     - task: PublishTestResults@2
@@ -93,28 +101,47 @@ stages:
         failTaskOnFailedTests: false
         testRunTitle: apic-validation
 
-    - publish: $(Pipeline.Workspace)/products.txt
+    - publish: out/cs
       artifact: change-set
       displayName: Publish change set
       condition: always()
 
+# --------------------------------------------------------------------------------------------- dev instance
 - template: templates/publish-stage.yml
   parameters:
     env: dev
-    catalog: dev
-    dependsOn: validate
-    variableGroup: apic-dev
+    stage: dev
+    catalog: '<project>-dev'
+    dependsOn: [validate]
+
+- template: templates/publish-stage.yml
+  parameters:
+    env: dev
+    stage: integ
+    catalog: '<project>-integ'
+    dependsOn: [validate, publish_dev]
+    previousStage: publish_dev
+
+# --------------------------------------------------------------------------------------------- test instance
+- template: templates/publish-stage.yml
+  parameters:
+    env: test
+    stage: nightly
+    catalog: '<project>-nightly'
+    dependsOn: [validate]
 
 - template: templates/publish-stage.yml
   parameters:
     env: test
-    catalog: test
-    dependsOn: publish_dev
-    variableGroup: apic-test
+    stage: rc
+    catalog: '<project>-rc'
+    dependsOn: [validate, publish_nightly]
+    previousStage: publish_nightly
 
+# --------------------------------------------------------------------------------------------- prod instance
 - template: templates/publish-stage.yml
   parameters:
     env: prod
-    catalog: prod
-    dependsOn: publish_test
-    variableGroup: apic-prod
+    stage: prod
+    catalog: '<project>'
+    dependsOn: [validate]

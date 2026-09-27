@@ -1,0 +1,95 @@
+openapi: 3.0.3
+info:
+  title: Example API
+  version: 1.0.0
+  x-ibm-name: example-api
+  description: >-
+    Sample API used to bootstrap and test the GitOps pipeline. Replace it with your
+    first real API or delete the whole example-project folder.
+servers:
+  # APIC OAS3: the path of the single servers[] entry becomes the gateway base path.
+  - url: /example
+security:
+  - clientIdHeader: []
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Health check
+      description: Returns the health status of the backend.
+      tags: [Health]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '401':
+          description: Missing or invalid client id
+        '500':
+          description: Backend failure
+components:
+  schemas:
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        checkedAt:
+          type: string
+          format: date-time
+  securitySchemes:
+    clientIdHeader:
+      type: apiKey
+      in: header
+      name: X-IBM-Client-Id
+tags:
+  - name: Health
+x-ibm-configuration:
+  enforced: true
+  testable: true
+  phase: realized
+  type: rest
+  gateway: datapower-api-gateway
+  cors:
+    enabled: true
+  properties:
+    # Default value; overridden per catalog below so the SAME file can be promoted unchanged
+    # from dev/ to test/ to prod/. Keys are the catalog names of this project on every instance.
+    target-url:
+      value: https://example-dev.internal.example.com
+      description: Backend base URL
+      encoded: false
+  catalogs:
+    # VERIFY on your tenant: catalog-specific property values (x-ibm-configuration.catalogs.<catalog>.properties)
+    example-project-dev:
+      properties:
+        target-url: https://example-dev.internal.example.com
+    example-project-integ:
+      properties:
+        target-url: https://example-integ.internal.example.com
+    example-project-nightly:
+      properties:
+        target-url: https://example-nightly.internal.example.com
+    example-project-rc:
+      properties:
+        target-url: https://example-rc.internal.example.com
+    example-project:
+      properties:
+        target-url: https://example.internal.example.com
+  activity-log:
+    enabled: true
+    success-content: activity
+    error-content: payload
+  assembly:
+    execute:
+      - invoke:
+          version: 2.0.0
+          title: invoke
+          target-url: $(target-url)$(request.path)
+          verb: keep
+          timeout: 60
+          follow-redirects: false
