@@ -5,40 +5,41 @@ driven by **Azure DevOps Pipelines**.
 
 * Git is the single source of truth. API Manager drafts are not used; humans should only have *viewer* roles
   on the catalogs, the pipeline identities are the only publishers.
-* A change is a Pull Request. PRs are **validated** (four fail-fast stages), merges to `main` are **published**.
+* **Every publish is a pull request into the default branch.** PRs are validated (four fail-fast stages); the
+  merge publishes the changed folders to their catalogs.
 * Nothing is ever deleted or retired from APIC by this pipeline.
 
 ## Topology
 
-Three **API Connect instances** (separate clusters, endpoints and credentials), five **catalogs per project**,
-three **version folders** per project. A *stage* publishes one folder to one catalog on one instance:
+Three **API Connect instances** (separate clusters, ingress URLs and credentials), four **version folders** per
+project, five **catalogs** per project. A *stage* publishes one folder to one catalog on one instance:
 
-| Stage | Folder | Instance | Catalog | Trigger |
+| Folder | Stage | Catalog | Instance | Published when |
 |---|---|---|---|---|
-| `dev`     | `projects/<project>/dev/`  | dev  | `<project>-dev`     | merge to `main` |
-| `integ`   | `projects/<project>/dev/`  | dev  | `<project>-integ`   | approval, after `dev` (same run) |
-| `nightly` | `projects/<project>/dev/`  | test | `<project>-nightly` | nightly schedule (cron) |
-| `rc`      | `projects/<project>/test/` | test | `<project>-rc`      | approval, when `test/` changed |
-| `prod`    | `projects/<project>/prod/` | prod | `<project>`         | approval, when `prod/` changed |
+| `projects/<project>/dev/`   | `dev`     | `<project>-dev`     | dev  | a PR that changed `dev/` is merged |
+| `projects/<project>/dev/`   | `nightly` | `<project>-nightly` | test | same merge - `dev/` feeds both catalogs, no separate process |
+| `projects/<project>/integ/` | `integ`   | `<project>-integ`   | dev  | a promotion PR `dev -> integ` is merged |
+| `projects/<project>/rc/`    | `rc`      | `<project>-rc`      | test | a promotion PR `integ -> rc` is merged |
+| `projects/<project>/prod/`  | `prod`    | `<project>`         | prod | a promotion PR `rc -> prod` is merged |
 
-* `dev/` is the development state: it feeds `-dev` on merge, `-integ` after an approval click, and `-nightly`
-  on the test instance every night.
-* `test/` is the release candidate: a **promotion PR** (`scripts/promote.sh <project> dev test`) copies the
-  version in, merging it publishes to `-rc` after approval. `nightly` and `rc` are independent.
-* `prod/` is production: `scripts/promote.sh <project> test prod`, PR, approval.
-
-The mapping lives in [`config/topology.yml`](config/topology.yml); a project can override catalog names in
-`projects/<project>/project.yaml`. Each stage remembers its last publish with the git tag `published/<stage>`.
+* A folder holds **the version its catalog(s) should have**. Promotion = `scripts/promote.sh <project> <from> <to>`
+  copies the folder, you review the diff and open a PR. Order: `dev -> integ -> rc -> prod`.
+* Each stage remembers its last publish with the git tag `published/<stage>` and only publishes what changed since.
+* **Instances and their ingress URLs** live in [`config/topology.yml`](config/topology.yml): `ingress.management`
+  is the `apic --server` value, `ingress.gateway` the API gateway, `org` the provider organization. When an
+  ingress changes, edit that file - nothing else. Only the API keys and the toolkit `credentials.json` files stay in
+  Azure DevOps.
+* A project can override catalog names in `projects/<project>/project.yaml`.
 
 ## Layout
 
 ```
 .azure-pipelines/
-  apic-ci.yml                  entry pipeline: validate (PR + main + schedule) -> 5 independent publish stages
+  apic-ci.yml                  entry pipeline: validate (PR + main) -> 5 independent publish stages
   templates/install-tools.yml  yamllint, spectral, yq, oasdiff, apic toolkit (online or offline mode)
   templates/publish-stage.yml  one deployment stage per catalog
 config/
-  topology.yml                 instances, folders, stages, catalog name patterns (source of truth for the scripts)
+  topology.yml                 instances (ingress URLs, org), stages: folder -> catalog -> instance
   .yamllint.yml                stage 1 rules
   spectral.yml                 stage 2 rules (OAS 3.0 + APIC-specific)
   compat-ignore.txt            stage 4 reviewed exceptions (oasdiff --err-ignore)
@@ -48,15 +49,16 @@ docs/guide.pdf                 the readable guide (docs/guide.html is the source
 projects/
   <project>/
     project.yaml               optional: owner, catalog-name overrides
-    dev/                       development state -> -dev (merge), -integ (approval), -nightly (schedule)
+    dev/                       development state -> <project>-dev (dev instance) + <project>-nightly (test instance)
       apis/<api>.yaml          OpenAPI 3.0.x + x-ibm-configuration
       products/<product>.yaml  APIC product: plans, rate limits, visibility, apis.*.$ref -> ../apis/<api>.yaml
-    test/                      release candidate -> -rc (approval); filled by promote.sh dev test
-    prod/                      production -> <project> (approval); filled by promote.sh test prod
+    integ/                     -> <project>-integ (dev instance);  filled by promote.sh dev integ
+    rc/                        -> <project>-rc (test instance);    filled by promote.sh integ rc
+    prod/                      -> <project> (prod instance);       filled by promote.sh rc prod
 ```
 
 A **project folder = ownership boundary** and the prefix of its catalog names. A **version folder = the version
-a set of catalogs should have**. Files are meant to be byte-identical across folders; catalog differences are
+its catalog(s) should have**. Files are meant to be byte-identical across folders; catalog differences are
 expressed *inside* the file (see "One file, five catalogs").
 
 ## Conventions (enforced by the pipeline)
@@ -67,7 +69,7 @@ expressed *inside* the file (see "One file, five catalogs").
 | OpenAPI 3.0.x, `info.x-ibm-name` is a lowercase slug, `info.version` is strict semver, single `servers[]` entry, `x-ibm-configuration` with explicit `enforced`, DataPower API Gateway, no callbacks/links | stage 2, `spectral` (`config/spectral.yml`) |
 | Products reference APIs only through a relative `$ref` into the **same** `projects/<project>/<folder>/apis/`; no name:version refs, no cross-project or cross-folder refs; `apic validate` passes | stage 3, `scripts/validate-apic.sh` |
 | No breaking contract change without a MAJOR bump of `info.version`, judged per folder | stage 4, `oasdiff` |
-| Catalog-specific values live in `x-ibm-configuration.properties` + `catalogs.<catalog>.properties`, keyed by all five catalog names of the project; `test/` and `prod/` are only written by `promote.sh` | review + `promote.sh` |
+| Catalog-specific values live in `x-ibm-configuration.properties` + `catalogs.<catalog>.properties`, keyed by all five catalog names of the project; `integ/`, `rc/` and `prod/` are only written by `promote.sh` | review + `promote.sh` |
 
 ### One file, five catalogs
 
@@ -77,14 +79,14 @@ x-ibm-configuration:
     target-url: { value: https://orders-dev.internal }          # default
   catalogs:                                                     # overrides by catalog name
     orders-dev:     { properties: { target-url: https://orders-dev.internal } }
-    orders-integ:   { properties: { target-url: https://orders-integ.internal } }
     orders-nightly: { properties: { target-url: https://orders-nightly.internal } }
+    orders-integ:   { properties: { target-url: https://orders-integ.internal } }
     orders-rc:      { properties: { target-url: https://orders-rc.internal } }
     orders:         { properties: { target-url: https://orders.internal } }
 ```
 
-Because every catalog's value is in the file, promotion is a pure copy and the compatibility gate never sees
-environment differences as contract changes.
+Because every catalog's value is in the file, one `dev/` file serves `-dev` and `-nightly` at once, promotion is
+a pure copy, and the compatibility gate never sees catalog differences as contract changes.
 
 ### Versioning
 
@@ -111,55 +113,50 @@ Exceptions are added to `config/compat-ignore.txt` in the same PR, one per line,
 ## How a change flows
 
 ```
-PR -> main         : 0 change set per folder -> 1 yamllint -> 2 spectral -> 3 apic validate -> 4 oasdiff (vs target branch)
-merge to main      : same validation (vs each stage's published/<stage> tag), then every stage whose folder has
-                     something new (the others are Skipped):
-  dev/   -> publish_dev   (auto)  -> publish_integ (approval, same run)      dev  instance
-  test/  -> publish_rc    (approval)                                          test instance
-  prod/  -> publish_prod  (approval)                                          prod instance
-nightly schedule   : dev/  -> publish_nightly (auto, only on the cron run or a manual run)   test instance
-each publish stage : login to the instance -> change set vs published/<stage> -> 4' oasdiff vs live catalog
-                     -> apic products:publish per product into its catalog -> move tag published/<stage>
+PR -> main       : 0 change set per folder -> 1 yamllint -> 2 spectral -> 3 apic validate -> 4 oasdiff (vs target branch)
+merge to main    : same validation (vs each stage's published/<stage> tag), then every stage whose folder has
+                   something new, in parallel (the others are Skipped):
+  dev/    -> publish_dev     -> <project>-dev      dev  instance
+  dev/    -> publish_nightly -> <project>-nightly  test instance
+  integ/  -> publish_integ   -> <project>-integ    dev  instance
+  rc/     -> publish_rc      -> <project>-rc       test instance
+  prod/   -> publish_prod    -> <project>          prod instance
+each stage       : resolve ingress/org from topology.yml -> login to the instance -> change set vs published/<stage>
+                   -> 4' oasdiff vs live catalog -> apic products:publish per product -> move tag published/<stage>
 ```
 
-* **`-dev` -> `-integ`** is an *approval*, not a PR: both come from `dev/`. After a merge the run publishes to
-  `-dev` and waits on Environment `apic-integ`; approving publishes the same commit to `-integ`. If you do not
-  approve and more merges land, the newest run offers the union of everything since `published/integ`; with the
-  Environment's *Exclusive lock* set to "run latest", older pending approvals are cancelled automatically.
-* **`-nightly`** is a scheduled mirror of `dev/` on the test instance (`schedules:` in `apic-ci.yml`). It never
-  runs on a merge, has no approval, and is independent of `-rc`. A manual run also publishes it if `dev/` changed.
 * **Change set** = changed product files + products whose `$ref` points at a changed API file, restricted to the
   stage's folder (`scripts/changeset.sh`). Deleted files only produce a warning.
 * **Tags `published/<stage>`** (5) mark the last commit published to each catalog. A stage diffs against its own
-  tag, so a rejected `rc` approval last week is simply offered again by the next run. No tag => bootstrap:
-  every product of the folder is published.
-* **Promotion** = `scripts/promote.sh <project> dev test` (or `test prod`), review the diff, open a PR. Merging
-  publishes to the stage(s) of the target folder (`rc`, then `prod`).
-* **Rollback** = promote from a folder that still has the previous version, or run the pipeline for an earlier
-  commit, or `apic products:replace` to the previous product version.
+  tag, so a failed publish is simply retried by the next run. No tag => bootstrap: every product of the folder.
+* **Promotion** = `scripts/promote.sh <project> dev integ` (then `integ rc`, `rc prod`), review the diff, PR, merge.
+  The PR review is the gate; an approval on the Azure DevOps Environment `apic-<stage>` can be added as a
+  second gate (recommended for `apic-prod`).
+* **Rollback** = promote again from a folder that still has the previous version, or run the pipeline for an
+  earlier commit, or `apic products:replace` to the previous product version.
 
 ## Azure DevOps setup
 
 1. **Pipeline**: create from `.azure-pipelines/apic-ci.yml`. For a GitHub-hosted repo the `pr:` trigger is used;
    make the pipeline a required status check on `main`. For Azure Repos add a *Build validation* branch policy.
    On-prem: replace `vmImage: ubuntu-latest` with `name: <your agent pool>` in both pipeline files.
-2. **Variable group `apic-shared`** (plain): `APIC_TOOLKIT_VERSION` (e.g. `10.0.8.9`), `TOOLS_MODE`
+2. **`config/topology.yml`**: replace the `CHANGE ME` ingress URLs and org names of the three instances.
+3. **Variable group `apic-shared`** (plain): `APIC_TOOLKIT_VERSION` (e.g. `10.0.8.9`), `TOOLS_MODE`
    (`online` for Microsoft-hosted agents, `offline` for a self-hosted agent prepared with `tools/install-offline.sh`).
-3. **Variable groups `apic-dev`, `apic-test`, `apic-prod`** — one per instance: `APIC_SERVER` (that instance's
-   management/platform API endpoint), `APIC_ORG` (provider organization on that instance), and `APIC_APIKEY`
-   (secret, Key Vault-linked; a service ID that is a member of that instance's provider org with a publish role).
-4. **Secure files `apic-toolkit-credentials-dev.json`, `-test.json`, `-prod.json`**: each instance's
+4. **Variable groups `apic-dev`, `apic-test`, `apic-prod`** - one per instance, Key Vault-linked: `APIC_APIKEY`
+   (a service ID that is a member of that instance's provider org with a publish role).
+5. **Secure files `apic-toolkit-credentials-dev.json`, `-test.json`, `-prod.json`**: each instance's
    `credentials.json` from its API Manager -> *Tools for download*.
-5. **Environments `apic-dev`, `apic-integ`, `apic-nightly`, `apic-rc`, `apic-prod`**: add *Approvals* on
-   `apic-integ`, `apic-rc` and `apic-prod`; add *Exclusive lock* ("run latest") on all five so a newer run
-   supersedes an older pending approval and two runs never publish into the same catalog concurrently.
-   `apic-nightly` has no approval; the cron in `apic-ci.yml` (`schedules:`) decides when it runs.
-6. **Toolkit binary**: download the Linux CLI from API Manager -> *Tools for download*. If the instances run
+6. **Environments `apic-dev`, `apic-nightly`, `apic-integ`, `apic-rc`, `apic-prod`**: created automatically on
+   first run. Add *Exclusive lock* on all five; add *Approvals* where you want a gate besides the PR (e.g. `apic-prod`).
+7. **Toolkit binary**: download the Linux CLI from API Manager -> *Tools for download*. If the instances run
    different 10.0.8.x fix packs, use the toolkit of the highest one and verify against each. Online agents:
    publish it as a Universal Package `apic-toolkit` to the Artifacts feed `platform-tools`. Self-hosted agents:
    install it on PATH (the download is skipped automatically).
-7. **Repository permissions**: the pipeline pushes tags `published/<stage>`. Grant the build identity
+8. **Repository permissions**: the pipeline pushes tags `published/<stage>`. Grant the build identity
    *Contribute* + *Create tag* (GitHub: a token with `contents:write` used by the checkout step).
+9. **Catalogs** on the API Connect side: `<project>-dev`, `<project>-integ` on dev; `<project>-nightly`,
+   `<project>-rc` on test; `<project>` on prod - or declare other names in `project.yaml`.
 
 ## On-prem (offline) agent
 
@@ -173,12 +170,14 @@ sudo install -m 0755 apic-slim /usr/local/bin/apic # toolkit from your tenant, n
 
 Then set `TOOLS_MODE = offline` in `apic-shared` and point `pool:` in the pipeline files at your agent pool.
 In offline mode the tooling step never reaches the internet; a missing tool fails the job with a clear message.
+The agent needs network access to the three management ingresses in `config/topology.yml`.
 
 ## Items to verify on each instance before the first publish
 
-- [ ] Non-interactive login: `apic iam-apikey --server <mgmt> --apiKey <IBM Cloud API key>`. If an instance only
+- [ ] `config/topology.yml` has the real ingress URLs; `apic catalogs:list --server <ingress.management> --org <org>`
+      works after `apic iam-apikey --server <ingress.management> --apiKey <IBM Cloud API key>`. If an instance only
       accepts IBMid/OIDC, switch the login step in `templates/publish-stage.yml` to
-      `apic login --server <mgmt> --sso --context provider --apiKey <toolkit API key>` (`apic api-keys:create` with a long `ttl`).
+      `apic login --server ... --sso --context provider --apiKey <toolkit API key>` (`apic api-keys:create` with a long `ttl`).
 - [ ] `apic apis:get --scope catalog ... --format yaml --output -` returns the bare definition or an envelope
       (`scripts/compat-check.sh` handles both, but check the log the first time).
 - [ ] `apic apis:list --format json` returns `{ "results": [...] }` (handled either way, same as above).
@@ -203,16 +202,17 @@ scripts/validate-yaml.sh out/cs/products.txt out/cs/apis.txt  # 1
 scripts/validate-oas.sh  out/cs/apis.txt                      # 2
 scripts/validate-apic.sh out/cs/products.txt                  # 3 (needs apic)
 scripts/validate-compat.sh out/cs                             # 4, per folder
-scripts/promote.sh example-project dev test                   # promotion: copies dev/ -> test/, shows the diff
+scripts/promote.sh example-project dev integ                  # promotion: copies dev/ -> integ/, shows the diff
+eval "$(scripts/stage-env.sh --stage rc)"                     # APIC_SERVER / APIC_ORG of the instance behind a stage
 ```
 
 ## Adding an API
 
-1. `projects/<project>/dev/apis/<api>.yaml` — OpenAPI 3.0.x with `info.x-ibm-name`, semver `info.version`,
+1. `projects/<project>/dev/apis/<api>.yaml` - OpenAPI 3.0.x with `info.x-ibm-name`, semver `info.version`,
    one `servers[].url`, and `x-ibm-configuration` with `catalogs.*` overrides for all five catalogs
    (see `projects/example-project`).
 2. Reference it from a product in `projects/<project>/dev/products/` via `$ref: ../apis/<api>.yaml`.
-3. Open a PR. Fix anything the four stages report. Merge -> `<project>-dev`; approve -> `<project>-integ`.
-   The next scheduled run publishes it to `<project>-nightly` on the test instance.
-4. When ready for a release candidate: `scripts/promote.sh <project> dev test`, PR, merge, approve -> `-rc`.
-5. Then `scripts/promote.sh <project> test prod`, PR, merge, approve -> `<project>`.
+3. Open a PR. Fix anything the four stages report. Merge -> `<project>-dev` and `<project>-nightly`.
+4. `scripts/promote.sh <project> dev integ`, PR, merge -> `<project>-integ`.
+5. `scripts/promote.sh <project> integ rc`, PR, merge -> `<project>-rc`.
+6. `scripts/promote.sh <project> rc prod`, PR, merge -> `<project>`.

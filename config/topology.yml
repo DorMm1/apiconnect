@@ -1,47 +1,60 @@
 # Topology - the single source of truth for scripts/*.sh and the mirror of the stage list in apic-ci.yml.
 #
-# instance = one API Connect installation (own cluster, management endpoint, credentials). Credentials come from
-#            the Azure DevOps variable group `apic-<instance>` (APIC_SERVER, APIC_ORG, APIC_APIKEY) and the
-#            Secure File `apic-toolkit-credentials-<instance>.json`.
+# instance = one API Connect installation (own cluster, own ingress URLs, own credentials).
+#   ingress.management  the URL the toolkit logs in to (`apic --server`): the platform-API / API Manager ingress
+#   ingress.gateway     the API gateway ingress that serves the published APIs (informational, smoke tests)
+#   org                 provider organization name on that instance
+#   Secrets are NOT here: the API key comes from the Azure DevOps variable group `apic-<instance>` (APIC_APIKEY)
+#   and the toolkit client credentials from the Secure File `apic-toolkit-credentials-<instance>.json`.
+#
 # folder   = projects/<project>/<folder>/{apis,products}/ - a version of the project's definitions.
-#            Moving a version between folders is a promotion PR (scripts/promote.sh).
-# stage    = publishes ONE folder to ONE catalog on ONE instance. The git tag `published/<stage>` marks the
-#            last commit published there; the Azure DevOps Environment `apic-<stage>` carries the gate.
-#   trigger: merge     - runs automatically when the folder changed on main
-#            approval  - runs after a human approves on the Environment (same run as the merge)
-#            schedule  - runs only from the pipeline's cron schedule (or a manual run)
-#   after:   stage of the same run that must have succeeded or been skipped first
+#            Moving a version to the next folder is a promotion PR (scripts/promote.sh). Order: dev -> integ -> rc -> prod.
+#
+# stage    = publishes ONE folder to ONE catalog on ONE instance, when a PR that changed the folder is merged into
+#            the default branch. The git tag `published/<stage>` marks the last commit published there. The Azure DevOps
+#            Environment `apic-<stage>` exists for every stage; adding an approval to it is optional.
+#            A folder may feed several stages (dev/ -> -dev on the dev instance AND -nightly on the test instance).
+#
 # catalog  = pattern; {project} is the project folder name. A project can override a name in
 #            projects/<project>/project.yaml  ->  catalogs: { <stage>: <catalog-name> }.
 instances:
-  dev:  { description: Development instance }
-  test: { description: Test instance }
-  prod: { description: Production instance }
+  dev:
+    description: Development instance
+    ingress:
+      management: https://platform-api.dev.apic.example.com   # CHANGE ME - `apic --server` value for the dev instance
+      gateway: https://gw.dev.apic.example.com                # CHANGE ME - API gateway ingress of the dev instance
+    org: my-provider-org                                      # CHANGE ME
+  test:
+    description: Test instance
+    ingress:
+      management: https://platform-api.test.apic.example.com  # CHANGE ME
+      gateway: https://gw.test.apic.example.com               # CHANGE ME
+    org: my-provider-org                                      # CHANGE ME
+  prod:
+    description: Production instance
+    ingress:
+      management: https://platform-api.apic.example.com       # CHANGE ME
+      gateway: https://gw.apic.example.com                    # CHANGE ME
+    org: my-provider-org                                      # CHANGE ME
 
 stages:
   - name: dev
     folder: dev
     instance: dev
     catalog: "{project}-dev"
-    trigger: merge
-  - name: integ
-    folder: dev
-    instance: dev
-    catalog: "{project}-integ"
-    trigger: approval
-    after: dev
   - name: nightly
-    folder: dev                 # the current development state, published every night to the test instance
+    folder: dev                 # same files as -dev, on the test instance; no separate process
     instance: test
     catalog: "{project}-nightly"
-    trigger: schedule
+  - name: integ
+    folder: integ
+    instance: dev
+    catalog: "{project}-integ"
   - name: rc
-    folder: test                # a deliberately promoted release candidate (promotion PR dev -> test)
+    folder: rc
     instance: test
     catalog: "{project}-rc"
-    trigger: approval
   - name: prod
-    folder: prod                # promotion PR test -> prod
+    folder: prod
     instance: prod
     catalog: "{project}"
-    trigger: approval

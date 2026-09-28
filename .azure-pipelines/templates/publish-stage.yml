@@ -1,64 +1,32 @@
 # One deployment stage = one publish stage = one folder published to one catalog per project on one instance.
 # Instantiated from apic-ci.yml for every stage in config/topology.yml.
 #
-# Approvals, exclusive lock and other gates are configured on the Azure DevOps *Environment* apic-<stage>.
-# Credentials of the INSTANCE come from the variable group apic-<instance> and the Secure File
-# apic-toolkit-credentials-<instance>.json (each instance has its own management endpoint and toolkit credentials).
+# Runs when a PR that changed the folder was merged into main (or on a manual run) and the folder has something
+# new since the git tag published/<stage>; otherwise the stage is Skipped. Stages are independent of each other.
 #
-# What is published: the products under projects/*/<folder>/ whose files changed since the git tag published/<stage>,
-# i.e. since the last successful publish to THIS stage. Missing tag (bootstrap) => every product of the folder.
-# The stage is skipped entirely when the validate stage found nothing new for it, so approvers are never asked
-# to approve an empty publish.
+# Instance settings (management ingress = `apic --server`, org) are read from config/topology.yml by
+# scripts/stage-env.sh. Secrets come from Azure DevOps: variable group apic-<instance> (APIC_APIKEY) and the
+# Secure File apic-toolkit-credentials-<instance>.json.
 #
-# trigger:  merge     runs on pushes to main and manual runs
-#           approval  same as merge, plus the Environment's approval; with `after`, waits for that stage
-#           schedule  runs only on scheduled and manual runs (never on a plain merge)
+# Approvals / exclusive lock are configured on the Azure DevOps Environment apic-<stage> (optional: the PR review is
+# the primary gate).
 parameters:
-- { name: stage,    type: string }          # dev | integ | nightly | rc | prod -> Environment apic-<stage>, tag published/<stage>
-- { name: folder,   type: string }          # dev | test | prod -> projects/*/<folder>/
+- { name: stage,    type: string }          # dev | nightly | integ | rc | prod -> Environment apic-<stage>, tag published/<stage>
+- { name: folder,   type: string }          # dev | integ | rc | prod -> projects/*/<folder>/
 - { name: instance, type: string }          # dev | test | prod -> variable group apic-<instance>, secure file
 - { name: catalog,  type: string }          # display only; the real name comes from config/topology.yml / project.yaml
-- { name: trigger,  type: string, values: [merge, approval, schedule] }
-- { name: dependsOn, type: object }
-- { name: after,    type: string, default: '' }   # stage of the same run that must have succeeded or been skipped first
 
 stages:
 - stage: publish_${{ parameters.stage }}
   displayName: Publish ${{ parameters.stage }} · ${{ parameters.folder }}/ -> ${{ parameters.catalog }} (${{ parameters.instance }} instance)
-  dependsOn: ${{ parameters.dependsOn }}
-  # Common to all variants: only from main, never from a PR, validate succeeded, this stage's folder has unpublished
-  # changes (output variable changes.<stage> of the validate job).
-  ${{ if eq(parameters.trigger, 'schedule') }}:
-    # schedule: only scheduled or manual runs
-    condition: >-
-      and(
-        eq(variables['Build.SourceBranch'], 'refs/heads/main'),
-        ne(variables['Build.Reason'], 'PullRequest'),
-        in(variables['Build.Reason'], 'Schedule', 'Manual'),
-        eq(dependencies.validate.result, 'Succeeded'),
-        eq(dependencies.validate.outputs['validate.changes.${{ parameters.stage }}'], 'true')
-      )
-  ${{ elseif ne(parameters.after, '') }}:
-    # merge/approval, second catalog of an instance: never on a scheduled run, only after the first catalog's stage
-    condition: >-
-      and(
-        eq(variables['Build.SourceBranch'], 'refs/heads/main'),
-        ne(variables['Build.Reason'], 'PullRequest'),
-        ne(variables['Build.Reason'], 'Schedule'),
-        eq(dependencies.validate.result, 'Succeeded'),
-        in(dependencies.${{ parameters.after }}.result, 'Succeeded', 'Skipped'),
-        eq(dependencies.validate.outputs['validate.changes.${{ parameters.stage }}'], 'true')
-      )
-  ${{ else }}:
-    # merge/approval, first catalog of an instance: never on a scheduled run
-    condition: >-
-      and(
-        eq(variables['Build.SourceBranch'], 'refs/heads/main'),
-        ne(variables['Build.Reason'], 'PullRequest'),
-        ne(variables['Build.Reason'], 'Schedule'),
-        eq(dependencies.validate.result, 'Succeeded'),
-        eq(dependencies.validate.outputs['validate.changes.${{ parameters.stage }}'], 'true')
-      )
+  dependsOn: [validate]
+  condition: >-
+    and(
+      eq(variables['Build.SourceBranch'], 'refs/heads/main'),
+      ne(variables['Build.Reason'], 'PullRequest'),
+      eq(dependencies.validate.result, 'Succeeded'),
+      eq(dependencies.validate.outputs['validate.changes.${{ parameters.stage }}'], 'true')
+    )
   variables:
   - group: apic-${{ parameters.instance }}
   jobs:
@@ -78,6 +46,9 @@ stages:
             persistCredentials: true          # required to push the published/<stage> tag
 
           - template: install-tools.yml
+
+          - bash: scripts/stage-env.sh --stage "${{ parameters.stage }}" --vso
+            displayName: Resolve instance ingress from config/topology.yml
 
           - task: DownloadSecureFile@1
             name: apicCreds

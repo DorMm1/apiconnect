@@ -72,14 +72,24 @@ require_stage() {
 }
 stage_folder()          { stage_attr "$1" folder; }
 stage_instance()        { stage_attr "$1" instance; }
-stage_trigger()         { stage_attr "$1" trigger; }
-stage_after()           { stage_attr "$1" after; }
 stage_catalog_pattern() { stage_attr "$1" catalog; }
 # folder_stages FOLDER -> stages that publish this folder, in order
 folder_stages() { FOLDER="$1" yq -r '.stages[] | select(.folder == strenv(FOLDER)) | .name' "$TOPOLOGY_FILE"; }
 # require_folder FOLDER -> exits 2 if no stage publishes the folder
 require_folder() {
   list_folders | grep -qx "$1" || { vso_error "Unknown folder '$1' (see $TOPOLOGY_FILE)"; exit 2; }
+}
+
+# instance_attr INSTANCE EXPR -> value of .instances.<instance><EXPR> or empty   (EXPR like ".org" or ".ingress.management")
+instance_attr() { INSTANCE="$1" yq -r ".instances[strenv(INSTANCE)]$2 // \"\"" "$TOPOLOGY_FILE" 2>/dev/null; }
+instance_server()  { instance_attr "$1" '.ingress.management'; }
+instance_gateway() { instance_attr "$1" '.ingress.gateway'; }
+instance_org()     { instance_attr "$1" '.org'; }
+# require_instance INSTANCE -> exits 2 if the instance is not declared or lacks the management ingress / org
+require_instance() {
+  list_instances | grep -qx "$1" || { vso_error "Unknown instance '$1' (see $TOPOLOGY_FILE)"; exit 2; }
+  [[ -n "$(instance_server "$1")" && -n "$(instance_org "$1")" ]] \
+    || { vso_error "Instance '$1' needs ingress.management and org in $TOPOLOGY_FILE"; exit 2; }
 }
 # catalog_for PROJECT STAGE -> catalog name (project.yaml override wins over the pattern)
 catalog_for() {

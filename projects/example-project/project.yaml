@@ -1,11 +1,11 @@
 # Optional per-project settings. Only needed when a catalog name does not follow the pattern in
-# config/topology.yml ({project}-dev, {project}-integ, {project}-nightly, {project}-rc, {project}).
+# config/topology.yml ({project}-dev, {project}-nightly, {project}-integ, {project}-rc, {project}).
 #
 # name: example-project
 # catalogs:
 #   dev: example-project-dev
-#   integ: example-project-integ
 #   nightly: example-project-nightly
+#   integ: example-project-integ
 #   rc: example-project-rc
 #   prod: example-project
 name: example-project

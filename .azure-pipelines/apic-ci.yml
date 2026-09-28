@@ -1,23 +1,23 @@
 # APIConnect-catalog - GitOps pipeline for IBM API Connect 10.0.8.x, Azure DevOps.
 #
 # Topology (config/topology.yml - keep the stage list below in sync with it):
-#   folder  projects/<project>/dev/   -> stage dev      -> <project>-dev      on the dev  instance   (on merge)
-#                                     -> stage integ    -> <project>-integ    on the dev  instance   (approval, after dev)
-#                                     -> stage nightly  -> <project>-nightly  on the test instance   (nightly schedule)
-#   folder  projects/<project>/test/  -> stage rc       -> <project>-rc       on the test instance   (approval)
-#   folder  projects/<project>/prod/  -> stage prod     -> <project>          on the prod instance   (approval)
+#   folder  projects/<project>/dev/    -> stage dev      -> <project>-dev      on the dev  instance
+#                                      -> stage nightly  -> <project>-nightly  on the test instance   (same files)
+#   folder  projects/<project>/integ/  -> stage integ    -> <project>-integ    on the dev  instance
+#   folder  projects/<project>/rc/     -> stage rc       -> <project>-rc       on the test instance
+#   folder  projects/<project>/prod/   -> stage prod     -> <project>          on the prod instance
 #
 #   Pull request -> main : Validate only (stages 1-4) for every folder touched. No call writes to APIC.
-#   Push to main         : Validate, then publish stages; every stage is skipped when its folder has nothing
-#                          new since the tag published/<stage>. nightly never runs on merge.
-#   Nightly schedule     : only the nightly stage: current dev/ folder -> <project>-nightly on the test instance.
-#   Manual run           : validate + every stage that has something new (including nightly).
+#   Merge to main        : Validate, then every publish stage whose folder changed since its tag published/<stage>;
+#                          the others are Skipped. All five stages are independent and run in parallel.
+#   Ingress URLs / org of each instance come from config/topology.yml; only the API key and the toolkit
+#   credentials.json live in Azure DevOps (variable group apic-<instance>, Secure File).
 #
 # Required Azure DevOps setup (README "Azure DevOps setup"):
 #   Variable group  apic-shared                        : APIC_TOOLKIT_VERSION, TOOLS_MODE (online|offline)
-#   Variable groups apic-dev / apic-test / apic-prod   : APIC_SERVER, APIC_ORG (plain), APIC_APIKEY (secret, Key Vault)
+#   Variable groups apic-dev / apic-test / apic-prod   : APIC_APIKEY (secret, Key Vault)
 #   Secure files    apic-toolkit-credentials-dev.json / -test.json / -prod.json
-#   Environments    apic-dev, apic-integ, apic-nightly, apic-rc, apic-prod (approvals + exclusive lock where wanted)
+#   Environments    apic-dev, apic-nightly, apic-integ, apic-rc, apic-prod (approvals optional; exclusive lock recommended)
 
 trigger:
   branches:
@@ -31,13 +31,6 @@ pr:
     include: [main]
   paths:
     include: [projects/**, config/**, scripts/**, .azure-pipelines/**]
-
-schedules:
-- cron: '0 1 * * 1-5'            # 01:00 UTC, Monday-Friday - adjust to your quiet hours
-  displayName: Nightly -> <project>-nightly (test instance)
-  branches:
-    include: [main]
-  always: false                  # skip the night if main did not change since the last scheduled run
 
 variables:
 - group: apic-shared
@@ -113,18 +106,19 @@ stages:
 
 # --------------------------------------------------------------------------------------------- dev/ folder
 - template: templates/publish-stage.yml
-  parameters: { stage: dev, folder: dev, instance: dev, catalog: '<project>-dev', trigger: merge, dependsOn: [validate] }
+  parameters: { stage: dev, folder: dev, instance: dev, catalog: '<project>-dev' }
 
 - template: templates/publish-stage.yml
-  parameters: { stage: integ, folder: dev, instance: dev, catalog: '<project>-integ', trigger: approval, dependsOn: [validate, publish_dev], after: publish_dev }
+  parameters: { stage: nightly, folder: dev, instance: test, catalog: '<project>-nightly' }
 
+# --------------------------------------------------------------------------------------------- integ/ folder
 - template: templates/publish-stage.yml
-  parameters: { stage: nightly, folder: dev, instance: test, catalog: '<project>-nightly', trigger: schedule, dependsOn: [validate] }
+  parameters: { stage: integ, folder: integ, instance: dev, catalog: '<project>-integ' }
 
-# --------------------------------------------------------------------------------------------- test/ folder
+# --------------------------------------------------------------------------------------------- rc/ folder
 - template: templates/publish-stage.yml
-  parameters: { stage: rc, folder: test, instance: test, catalog: '<project>-rc', trigger: approval, dependsOn: [validate] }
+  parameters: { stage: rc, folder: rc, instance: test, catalog: '<project>-rc' }
 
 # --------------------------------------------------------------------------------------------- prod/ folder
 - template: templates/publish-stage.yml
-  parameters: { stage: prod, folder: prod, instance: prod, catalog: '<project>', trigger: approval, dependsOn: [validate] }
+  parameters: { stage: prod, folder: prod, instance: prod, catalog: '<project>' }

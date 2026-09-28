@@ -58,7 +58,7 @@ x-ibm-configuration:
     enabled: true
   properties:
     # Default value; overridden per catalog below so the SAME file can be promoted unchanged from dev/ to
-    # test/ to prod/. Keys are the five catalog names of this project across the three instances.
+    # integ/ to rc/ to prod/. Keys are the five catalog names of this project across the three instances.
     target-url:
       value: https://example-dev.internal.example.com
       description: Backend base URL

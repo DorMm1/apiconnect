@@ -5,7 +5,7 @@
 #
 #   projects/<project>/<from>/{apis,products}/*  ->  projects/<project>/<to>/{apis,products}/
 #
-# Typical path: dev -> test (feeds <project>-rc after approval), test -> prod (feeds <project> after approval).
+# Promotion order: dev -> integ -> rc -> prod (each folder feeds the catalog(s) listed in config/topology.yml).
 # The result is an ordinary working-tree change: review `git diff`, commit on a branch, open a pull request.
 # Files that exist only in the target are kept (and listed) unless --prune is given; remember that deleting a
 # file never removes anything from API Connect.
@@ -50,5 +50,5 @@ echo
 git --no-pager diff --stat -- "$DST" || true
 echo
 targets=""
-for s in $(folder_stages "$TO"); do targets+="$s -> $(catalog_for "$PROJECT" "$s") [$(stage_trigger "$s")]  "; done
+for s in $(folder_stages "$TO"); do targets+="$s -> $(catalog_for "$PROJECT" "$s") on $(stage_instance "$s") ($(instance_server "$(stage_instance "$s")"))  "; done
 echo "Next: review 'git diff -- $DST', commit on a branch, open a pull request. Merging publishes: $targets"
