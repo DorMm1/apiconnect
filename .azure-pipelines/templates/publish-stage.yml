@@ -11,10 +11,12 @@
 # Approvals / exclusive lock are configured on the Azure DevOps Environment apic-<stage> (optional: the PR review is
 # the primary gate).
 parameters:
-- { name: stage,    type: string }          # dev | nightly | integ | rc | prod -> Environment apic-<stage>, tag published/<stage>
-- { name: folder,   type: string }          # dev | integ | rc | prod -> projects/*/<folder>/
-- { name: instance, type: string }          # dev | test | prod -> variable group apic-<instance>, secure file
-- { name: catalog,  type: string }          # display only; the real name comes from config/topology.yml / project.yaml
+- { name: stage,      type: string }        # dev | nightly | integ | rc | prod -> Environment apic-<stage>, tag published/<stage>
+- { name: folder,     type: string }        # dev | integ | rc | prod -> projects/*/<folder>/
+- { name: instance,   type: string }        # dev | test | prod -> variable group apic-<instance>, secure file
+- { name: catalog,    type: string }        # display only; the real name comes from config/topology.yml / project.yaml
+- { name: agentPool,  type: string, default: '' }             # self-hosted pool name; empty = Microsoft-hosted ubuntu-latest
+- { name: apicSource, type: string, default: preinstalled }   # preinstalled | artifacts (see install-tools.yml)
 
 stages:
 - stage: publish_${{ parameters.stage }}
@@ -34,7 +36,10 @@ stages:
     displayName: apic products:publish
     environment: apic-${{ parameters.stage }}
     pool:
-      vmImage: ubuntu-latest          # on-prem: replace with  name: <your agent pool>
+      ${{ if ne(parameters.agentPool, '') }}:
+        name: ${{ parameters.agentPool }}
+      ${{ else }}:
+        vmImage: ubuntu-latest
     workspace:
       clean: all
     strategy:
@@ -46,6 +51,8 @@ stages:
             persistCredentials: true          # required to push the published/<stage> tag
 
           - template: install-tools.yml
+            parameters:
+              apicSource: ${{ parameters.apicSource }}
 
           - bash: scripts/stage-env.sh --stage "${{ parameters.stage }}" --vso
             displayName: Resolve instance ingress from config/topology.yml

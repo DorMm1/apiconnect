@@ -7,12 +7,18 @@
 #                      offline bundle (yq, oasdiff, jq, standalone spectral, yamllint, and the apic toolkit
 #                      on PATH). No network access is attempted; missing tools fail the job immediately.
 #
-# apic toolkit (online mode): for API Connect SaaS the CLI is downloaded from your tenant (API Manager ->
-# "Tools for download"), it is not on a public URL. Upload it once as a Universal Package to Azure Artifacts:
-#   az artifacts universal publish --organization <org-url> --feed platform-tools --name apic-toolkit \
-#      --version 10.0.8.9 --path ./toolkit-dir      (toolkit-dir contains the linux `apic` binary)
-# If `apic` is already on PATH the download is skipped in both modes.
+# apic toolkit: the CLI is downloaded from your API Manager ("Tools for download"), it is not on a public URL.
+#   apicSource: preinstalled  (default) `apic` is already on the agent's PATH (self-hosted / on-prem). Nothing is downloaded.
+#   apicSource: artifacts     Microsoft-hosted agents: download it as a Universal Package from Azure Artifacts, uploaded once with
+#      az artifacts universal publish --organization <org-url> --feed platform-tools --name apic-toolkit \
+#         --version 10.0.8.9 --path ./toolkit-dir      (toolkit-dir contains the linux `apic` binary)
+#   The UniversalPackages task is only included in the pipeline when apicSource is `artifacts`, so an Azure DevOps
+#   Server without the Artifacts extension compiles the pipeline fine.
 parameters:
+- name: apicSource
+  type: string
+  default: preinstalled
+  values: [preinstalled, artifacts]
 - name: apicFeed
   type: string
   default: platform-tools
@@ -74,29 +80,31 @@ steps:
       echo "##vso[task.setvariable variable=APIC_PRESENT]true"
     else
       echo "##vso[task.setvariable variable=APIC_PRESENT]false"
-      if [[ "$(TOOLS_MODE_EFFECTIVE)" == "offline" ]]; then
-        echo "##vso[task.logissue type=error]offline mode: the apic toolkit is not on PATH. Download it from API Manager -> Tools for download and install it on the agent."
+      if [[ "$(TOOLS_MODE_EFFECTIVE)" == "offline" || "${{ parameters.apicSource }}" == "preinstalled" ]]; then
+        echo "##vso[task.logissue type=error]the apic toolkit is not on PATH. Download it from API Manager -> Tools for download and install it on the agent (e.g. /usr/local/bin/apic)."
         exit 1
       fi
     fi
   displayName: 'tools: detect apic'
 
-- task: UniversalPackages@0
-  displayName: 'tools: download apic toolkit $(APIC_TOOLKIT_VERSION)'
-  condition: and(succeeded(), ne(variables['APIC_PRESENT'], 'true'))
-  inputs:
-    command: download
-    vstsFeed: ${{ parameters.apicFeed }}
-    vstsFeedPackage: ${{ parameters.apicPackage }}
-    vstsPackageVersion: $(APIC_TOOLKIT_VERSION)
-    downloadDirectory: $(Agent.ToolsDirectory)/apic
+- ${{ if eq(parameters.apicSource, 'artifacts') }}:
+  - task: UniversalPackages@0
+    displayName: 'tools: download apic toolkit $(APIC_TOOLKIT_VERSION)'
+    condition: and(succeeded(), ne(variables['APIC_PRESENT'], 'true'))
+    inputs:
+      command: download
+      vstsFeed: ${{ parameters.apicFeed }}
+      vstsFeedPackage: ${{ parameters.apicPackage }}
+      vstsPackageVersion: $(APIC_TOOLKIT_VERSION)
+      downloadDirectory: $(Agent.ToolsDirectory)/apic
 
-- bash: |
-    set -euo pipefail
-    if [[ "$(APIC_PRESENT)" != "true" ]]; then
-      chmod +x "$(Agent.ToolsDirectory)/apic/apic"
-      echo "##vso[task.prependpath]$(Agent.ToolsDirectory)/apic"
-      export PATH="$(Agent.ToolsDirectory)/apic:$PATH"
-    fi
-    apic --accept-license version
-  displayName: 'tools: apic on PATH'
+  - bash: |
+      set -euo pipefail
+      if [[ "$(APIC_PRESENT)" != "true" ]]; then
+        chmod +x "$(Agent.ToolsDirectory)/apic/apic"
+        echo "##vso[task.prependpath]$(Agent.ToolsDirectory)/apic"
+      fi
+    displayName: 'tools: apic on PATH'
+
+- bash: apic --accept-license version
+  displayName: 'tools: apic version'

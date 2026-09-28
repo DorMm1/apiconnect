@@ -46,6 +46,7 @@ config/
 scripts/                       everything the pipeline runs; usable locally (see below)
 tools/install-offline.sh       installs the bundled tools on an on-prem (offline) Linux x64 agent
 docs/guide.pdf                 the readable guide (docs/guide.html is the source)
+docs/onprem-setup.pdf          step-by-step runbook for Azure DevOps Server + self-hosted agent
 projects/
   <project>/
     project.yaml               optional: owner, catalog-name overrides
@@ -139,7 +140,8 @@ each stage       : resolve ingress/org from topology.yml -> login to the instanc
 
 1. **Pipeline**: create from `.azure-pipelines/apic-ci.yml`. For a GitHub-hosted repo the `pr:` trigger is used;
    make the pipeline a required status check on `main`. For Azure Repos add a *Build validation* branch policy.
-   On-prem: replace `vmImage: ubuntu-latest` with `name: <your agent pool>` in both pipeline files.
+   Two settings at the top of `apic-ci.yml`: `AGENT_POOL` (self-hosted pool name; empty = Microsoft-hosted
+   `ubuntu-latest`) and `APIC_TOOLKIT_SOURCE` (`preinstalled` on the agent, or `artifacts` = Universal Package).
 2. **`config/topology.yml`**: replace the `CHANGE ME` ingress URLs and org names of the three instances.
 3. **Variable group `apic-shared`** (plain): `APIC_TOOLKIT_VERSION` (e.g. `10.0.8.9`), `TOOLS_MODE`
    (`online` for Microsoft-hosted agents, `offline` for a self-hosted agent prepared with `tools/install-offline.sh`).
@@ -158,19 +160,22 @@ each stage       : resolve ingress/org from topology.yml -> login to the instanc
 9. **Catalogs** on the API Connect side: `<project>-dev`, `<project>-integ` on dev; `<project>-nightly`,
    `<project>-rc` on test; `<project>` on prod - or declare other names in `project.yaml`.
 
-## On-prem (offline) agent
+## On-prem: Azure DevOps Server + offline agent
 
-The offline bundle (`APIConnect-catalog-bundle-<date>.zip`) contains this repository, `tools/linux-x64/` with
-yq, oasdiff, jq, a standalone Spectral and yamllint wheels, and `docs/guide.pdf`. On the agent:
+Follow **`docs/onprem-setup.pdf`** - a 10-step runbook (agent, certificates, repo import, library, pipeline,
+branch policy, permissions, first run). In short:
 
 ```bash
-sudo bash tools/install-offline.sh                 # verifies SHA256SUMS, installs to /usr/local/bin, pip installs yamllint
-sudo install -m 0755 apic-slim /usr/local/bin/apic # toolkit from your tenant, not in the bundle
+sudo bash tools/install-offline.sh                 # bundle tools -> /usr/local/bin, yamllint via pip --no-index
+sudo install -m 0755 apic-slim /usr/local/bin/apic # toolkit from your API Manager, not in the bundle
 ```
 
-Then set `TOOLS_MODE = offline` in `apic-shared` and point `pool:` in the pipeline files at your agent pool.
-In offline mode the tooling step never reaches the internet; a missing tool fails the job with a clear message.
-The agent needs network access to the three management ingresses in `config/topology.yml`.
+* `config/topology.yml`: ingress URLs and org of the three instances. `apic-ci.yml`: `AGENT_POOL = <your pool>`,
+  `APIC_TOOLKIT_SOURCE = preinstalled`. Variable group `apic-shared`: `TOOLS_MODE = offline`.
+* Azure Repos ignores the YAML `pr:` block: PR validation is a *Build validation* branch policy on `main`.
+* No Key Vault on-prem: `APIC_APIKEY` is a padlocked secret variable in `apic-dev/test/prod`.
+* The agent needs HTTPS to the Azure DevOps Server and to the three management ingresses; internal CAs go into the
+  OS trust store (+ `NODE_EXTRA_CA_CERTS`).
 
 ## Items to verify on each instance before the first publish
 

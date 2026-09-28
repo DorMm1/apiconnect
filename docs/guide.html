@@ -101,7 +101,7 @@
       <div><b>Target platform</b>IBM API Connect 10.0.8.x — three instances (dev, test, prod)<br>DataPower API Gateway</div>
       <div><b>CI/CD</b>Azure DevOps Pipelines, self-hosted Linux x64 agent (on-prem) or Microsoft-hosted</div>
       <div><b>Repository</b>APIConnect-catalog (this bundle)</div>
-      <div><b>Document version</b>1.3 — 28 September 2026</div>
+      <div><b>Document version</b>1.3.1 — 28 September 2026</div>
       <div><b>Audience</b>Platform / integration engineers who operate the pipeline, and API developers who submit changes</div>
       <div><b>Companion files</b>README.md (reference), config/topology.yml, .azure-pipelines/, scripts/, tools/</div>
     </div>
@@ -669,7 +669,8 @@ apic --accept-license version                         <span class="c"># must mat
     <li><b>Verify as the agent user.</b> <code>for t in yamllint spectral yq oasdiff jq apic git realpath; do command -v $t; done</code> — every line must print a path.</li>
     <li><b>Push the repository</b> to your on-prem Git (Azure Repos or GitHub Enterprise): <code>git clone APIConnect-catalog.gitbundle APIConnect-catalog</code>, add the remote, push <code>main</code>.</li>
     <li><b>Tell the pipeline it is offline.</b> In variable group <code>apic-shared</code> set <code>TOOLS_MODE = offline</code>. The tooling step then only checks that the tools exist and never reaches the internet; a missing tool fails the job with a clear message.</li>
-    <li><b>Point the pipeline at your pool.</b> Replace <code>vmImage: ubuntu-latest</code> with <code>name: &lt;your agent pool&gt;</code> in <code>apic-ci.yml</code> and <code>templates/publish-stage.yml</code>.</li>
+    <li><b>Point the pipeline at your pool.</b> In <code>apic-ci.yml</code> set <code>AGENT_POOL</code> to your pool name and keep <code>APIC_TOOLKIT_SOURCE: preinstalled</code>. Nothing else in the pipeline changes.</li>
+    <li><b>Azure DevOps Server specifics</b> (branch policy instead of the <code>pr:</code> trigger, secret variables instead of Key Vault, build-service permissions, certificates) are covered step by step in <code>docs/onprem-setup.pdf</code>.</li>
   </ol>
   <div class="callout">
     <b>Updating tools later</b>

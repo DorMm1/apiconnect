@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>APIConnect-catalog — On-prem setup runbook (Azure DevOps Server)</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm 18mm 16mm; }
+  :root { --ink:#1f2937; --muted:#6b7280; --line:#e5e7eb; --soft:#f3f4f6; --blue:#1d4ed8; --blue-soft:#dbeafe; --green:#047857; --green-soft:#d1fae5; --amber:#b45309; --amber-soft:#fef3c7; --red:#b91c1c; --red-soft:#fee2e2; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif; color:var(--ink); font-size:10.5pt; line-height:1.45; }
+  h1 { font-size:22pt; margin:0 0 3mm; color:var(--blue); }
+  h2 { font-size:15pt; margin:0 0 3mm; padding-bottom:1.5mm; border-bottom:2px solid var(--blue-soft); page-break-after:avoid; }
+  h3 { font-size:11.5pt; margin:4.5mm 0 1.5mm; page-break-after:avoid; }
+  p { margin:0 0 2.5mm; } ul, ol { margin:0 0 2.5mm 5mm; padding:0; } li { margin-bottom:1.2mm; }
+  code, pre { font-family:Consolas,"Cascadia Mono","Courier New",monospace; }
+  code { background:var(--soft); padding:0 3px; border-radius:3px; font-size:9.3pt; }
+  pre { background:#0f172a; color:#e2e8f0; padding:3mm 4mm; border-radius:4px; font-size:8.6pt; line-height:1.4; white-space:pre-wrap; margin:2mm 0 3.5mm; page-break-inside:avoid; }
+  pre .c { color:#94a3b8; }
+  table { width:100%; border-collapse:collapse; margin:2mm 0 4mm; font-size:9.5pt; }
+  th, td { border:1px solid var(--line); padding:1.6mm 2.2mm; vertical-align:top; text-align:left; } th { background:var(--soft); font-weight:600; }
+  tr { page-break-inside:avoid; }
+  .section { page-break-before:always; }
+  .callout { border-left:4px solid var(--blue); background:var(--blue-soft); padding:2.5mm 3.5mm; margin:3mm 0; border-radius:0 4px 4px 0; page-break-inside:avoid; }
+  .callout.warn { border-color:var(--amber); background:var(--amber-soft); } .callout.ok { border-color:var(--green); background:var(--green-soft); } .callout.danger { border-color:var(--red); background:var(--red-soft); }
+  .callout b:first-child { display:block; margin-bottom:1mm; }
+  .step { display:flex; gap:3mm; margin:3.5mm 0; page-break-inside:avoid; }
+  .step .n { flex:0 0 9mm; height:9mm; border-radius:50%; background:var(--blue); color:white; font-weight:700; font-size:12pt; display:flex; align-items:center; justify-content:center; }
+  .step .body { flex:1; } .step h3 { margin-top:0.5mm; }
+  .where { font-size:9pt; color:var(--muted); margin-bottom:1.5mm; } .where b { color:#374151; }
+  .muted { color:var(--muted); } .small { font-size:9pt; }
+  .header { display:flex; justify-content:space-between; align-items:flex-end; border-bottom:2px solid var(--blue-soft); padding-bottom:3mm; margin-bottom:5mm; }
+  .header .meta { text-align:right; font-size:9pt; color:var(--muted); }
+  .check td:first-child { width:5%; font-size:12pt; text-align:center; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div><h1>On-prem setup runbook</h1><div class="muted">APIConnect-catalog on Azure DevOps Server with a self-hosted Linux agent</div></div>
+  <div class="meta">v1.0 · 28 September 2026<br>companion to guide.pdf (sections 12–13)</div>
+</div>
+
+<p>This runbook takes you from the offline bundle to the first successful publish on an <b>on-prem Azure DevOps Server</b>
+(2020 or later; 2022 recommended) using <b>Azure Repos Git</b> and a <b>self-hosted Linux x64 agent</b> that has no internet access.
+Every step lists <i>where</i> to click and <i>what</i> to enter. Estimated time: 2–3 hours, most of it waiting for API keys and permissions.</p>
+
+<h3>What is different on Azure DevOps Server</h3>
+<table>
+  <tr><th style="width:32%">Topic</th><th>On Azure DevOps Server</th></tr>
+  <tr><td>PR validation</td><td>The <code>pr:</code> block in <code>apic-ci.yml</code> is ignored for Azure Repos. PR builds are configured with a <b>branch policy → Build validation</b> on <code>main</code> (step 8).</td></tr>
+  <tr><td>Secrets</td><td>No Azure Key Vault. <code>APIC_APIKEY</code> is a <b>secret variable</b> (padlock) in the variable group; it is encrypted at rest and masked in logs.</td></tr>
+  <tr><td>Agents</td><td>No Microsoft-hosted pool. Set <code>AGENT_POOL</code> in <code>apic-ci.yml</code> to your self-hosted pool (step 6). Tools come from the bundle (<code>TOOLS_MODE=offline</code>).</td></tr>
+  <tr><td>Toolkit</td><td>Installed on the agent; <code>APIC_TOOLKIT_SOURCE=preinstalled</code>. The Azure Artifacts task is not even included in the compiled pipeline.</td></tr>
+  <tr><td>Environments / deployment jobs</td><td>Available since Server 2020. The five <code>apic-*</code> Environments are created automatically on the first run.</td></tr>
+  <tr><td>Certificates</td><td>Internal CAs are common on-prem: the agent must trust the Azure DevOps Server certificate <i>and</i> the three API Connect management ingresses (step 3).</td></tr>
+</table>
+
+<div class="callout">
+  <b>You will need</b>
+  <ul style="margin-bottom:0">
+    <li>The bundle <code>APIConnect-catalog-bundle-&lt;date&gt;.zip</code> and its <code>.sha256</code>.</li>
+    <li>A Linux x64 VM for the agent (2 vCPU / 4 GB is plenty): bash 5, git ≥ 2.30, Python 3.9+ with pip, <code>unzip</code>, <code>sha256sum</code>, outbound HTTPS to the Azure DevOps Server and to the three API Connect management ingresses.</li>
+    <li>From each API Connect instance's API Manager → <i>Tools for download</i>: the Linux CLI and <code>credentials.json</code> (3×).</li>
+    <li>One IBM Cloud / toolkit API key per instance for a service identity that is a member of that instance's provider org with a publish role (3×).</li>
+    <li>Azure DevOps Server: rights to create a project/repo, agent pool, variable groups, secure files, pipelines and branch policies (Project Administrator).</li>
+  </ul>
+</div>
+
+<!-- ============================================================ -->
+<div class="section">
+<h2>Part A — The agent machine</h2>
+
+<div class="step"><div class="n">1</div><div class="body">
+<h3>Install the bundled tools</h3>
+<div class="where"><b>Where:</b> the agent VM, as a user with sudo</div>
+<pre>sha256sum -c APIConnect-catalog-bundle-*.zip.sha256          <span class="c"># integrity of the transfer</span>
+unzip APIConnect-catalog-bundle-*.zip && cd APIConnect-catalog-bundle-*
+sudo bash tools/install-offline.sh                           <span class="c"># verifies SHA256SUMS, installs yq/oasdiff/jq/spectral to /usr/local/bin, pip installs yamllint</span></pre>
+<p class="small">If <code>pip install</code> is refused system-wide, the script falls back to <code>--user</code>; then <code>~/.local/bin</code> of the <i>agent</i> user must be on PATH (see step 4).</p>
+</div></div>
+
+<div class="step"><div class="n">2</div><div class="body">
+<h3>Install the IBM API Connect toolkit</h3>
+<div class="where"><b>Where:</b> API Manager of any instance (use the highest fix pack) → <i>Tools for download</i> → CLI (Linux); then the agent VM</div>
+<pre>sudo install -m 0755 apic-slim /usr/local/bin/apic           <span class="c"># or `apic` if you downloaded CLI + Designer</span>
+apic --accept-license version                                <span class="c"># must print the toolkit version, 10.0.8.x</span></pre>
+</div></div>
+
+<div class="step"><div class="n">3</div><div class="body">
+<h3>Trust the internal certificates</h3>
+<div class="where"><b>Where:</b> the agent VM. Skip if all endpoints use publicly trusted certificates.</div>
+<pre><span class="c"># OS trust store (git, curl, most tools). Ubuntu/Debian:</span>
+sudo cp corp-root-ca.crt /usr/local/share/ca-certificates/ && sudo update-ca-certificates
+<span class="c"># RHEL:  sudo cp corp-root-ca.crt /etc/pki/ca-trust/source/anchors/ && sudo update-ca-trust</span>
+<span class="c"># Node-based tools (the Azure Pipelines agent tasks, and the apic toolkit - VERIFY for apic):</span>
+echo 'NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt' | sudo tee -a /etc/environment</pre>
+<p class="small">Test from the VM before going further: <code>curl -sS https://&lt;ado-server&gt;/tfs/ -o /dev/null -w '%{http_code}\n'</code> and
+<code>apic catalogs:list --server &lt;ingress.management&gt; --org &lt;org&gt;</code> after an interactive <code>apic iam-apikey</code> login. If <code>apic</code> reports a TLS error while
+<code>curl</code> works, the toolkit does not honour the OS store on your build; ask IBM support for the supported CA option of your toolkit version.</p>
+</div></div>
+
+<div class="step"><div class="n">4</div><div class="body">
+<h3>Register the Azure Pipelines agent</h3>
+<div class="where"><b>Where:</b> Azure DevOps Server → <i>Collection settings → Agent pools → Add pool</i> (self-hosted, name <code>apic-linux</code>) → <i>New agent</i> → download the Linux x64 agent (it is served by your own server). Create a PAT with scope <i>Agent Pools (Read &amp; manage)</i> for the registration.</div>
+<pre>sudo useradd -m -s /bin/bash azagent                          <span class="c"># dedicated user; never root</span>
+sudo mkdir -p /opt/azagent && sudo chown azagent /opt/azagent
+sudo -iu azagent bash -c 'cd /opt/azagent && tar zxf ~/vsts-agent-linux-x64-*.tar.gz && \
+  ./config.sh --unattended --url https://&lt;ado-server&gt;/tfs/DefaultCollection --auth pat --token &lt;PAT&gt; \
+              --pool apic-linux --agent apic-agent-01 --acceptTeeEula --replace'
+<span class="c"># PATH for the service (systemd does not read the user's profile):</span>
+echo 'PATH=/usr/local/bin:/usr/bin:/bin:/home/azagent/.local/bin' | sudo -u azagent tee /opt/azagent/.env
+cd /opt/azagent && sudo ./svc.sh install azagent && sudo ./svc.sh start
+<span class="c"># verify as the agent user: every line must print a path</span>
+sudo -iu azagent bash -c 'for t in yamllint spectral yq oasdiff jq apic git realpath; do command -v $t || echo "MISSING $t"; done'</pre>
+<p class="small">The pool must have <i>Grant access permission to all pipelines</i> (pool → Security), or you authorize the pipeline on its first run.</p>
+</div></div>
+</div>
+
+<!-- ============================================================ -->
+<div class="section">
+<h2>Part B — Repository and configuration</h2>
+
+<div class="step"><div class="n">5</div><div class="body">
+<h3>Import the repository into Azure Repos</h3>
+<div class="where"><b>Where:</b> Azure DevOps Server → your project → <i>Repos → New repository</i> (Git, name <code>APIConnect-catalog</code>, <b>uncheck</b> "Add a README"); then any machine with git</div>
+<pre>git clone APIConnect-catalog.gitbundle APIConnect-catalog     <span class="c"># from the bundle, with history</span>
+cd APIConnect-catalog
+git remote add origin https://&lt;ado-server&gt;/tfs/DefaultCollection/&lt;project&gt;/_git/APIConnect-catalog
+git push -u origin main</pre>
+<p>Then set <code>main</code> as the default branch (<i>Repos → Branches → … → Set as default branch</i>) if it is not already.</p>
+</div></div>
+
+<div class="step"><div class="n">6</div><div class="body">
+<h3>Point the repository at your instances and your pool</h3>
+<div class="where"><b>Where:</b> a branch + PR, or directly on <code>main</code> before the branch policy exists</div>
+<table>
+  <tr><th style="width:38%">File · setting</th><th>Value</th></tr>
+  <tr><td><code>config/topology.yml</code> · <code>instances.dev.ingress.management</code></td><td>The <code>apic --server</code> URL of the dev instance (platform-API / API Manager ingress), e.g. <code>https://api-manager.dev.apic.corp.local</code>. Same for <code>test</code> and <code>prod</code>.</td></tr>
+  <tr><td><code>config/topology.yml</code> · <code>instances.*.ingress.gateway</code></td><td>The gateway ingress of each instance (informational, used in docs/smoke tests).</td></tr>
+  <tr><td><code>config/topology.yml</code> · <code>instances.*.org</code></td><td>Provider organization name on each instance (<code>apic orgs:list --server …</code> shows it).</td></tr>
+  <tr><td><code>.azure-pipelines/apic-ci.yml</code> · <code>AGENT_POOL</code></td><td><code>apic-linux</code> (the pool from step 4)</td></tr>
+  <tr><td><code>.azure-pipelines/apic-ci.yml</code> · <code>APIC_TOOLKIT_SOURCE</code></td><td><code>preinstalled</code> (already the default)</td></tr>
+</table>
+<p class="small">No <code>CHANGE ME</code> may remain in <code>topology.yml</code>: the pipeline warns on placeholders. Commit and push.</p>
+</div></div>
+
+<div class="step"><div class="n">7</div><div class="body">
+<h3>Library: variable groups and secure files</h3>
+<div class="where"><b>Where:</b> <i>Pipelines → Library</i></div>
+<table>
+  <tr><th style="width:30%">Object</th><th>Content</th></tr>
+  <tr><td>Variable group <code>apic-shared</code></td><td><code>TOOLS_MODE</code> = <code>offline</code> · <code>APIC_TOOLKIT_VERSION</code> = e.g. <code>10.0.8.9</code> (informational)</td></tr>
+  <tr><td>Variable group <code>apic-dev</code></td><td><code>APIC_APIKEY</code> = API key of the dev instance's publishing identity — <b>click the padlock</b> to make it secret</td></tr>
+  <tr><td>Variable group <code>apic-test</code></td><td><code>APIC_APIKEY</code> for the test instance (secret)</td></tr>
+  <tr><td>Variable group <code>apic-prod</code></td><td><code>APIC_APIKEY</code> for the prod instance (secret)</td></tr>
+  <tr><td>Secure files (tab <i>Secure files</i>)</td><td>Upload the three <code>credentials.json</code> as <code>apic-toolkit-credentials-dev.json</code>, <code>apic-toolkit-credentials-test.json</code>, <code>apic-toolkit-credentials-prod.json</code> (rename before upload — the file name is the identifier).</td></tr>
+</table>
+<p class="small">On each group and file: <i>Pipeline permissions</i> → either authorize the <code>APIConnect-catalog</code> pipeline after you created it (step 8), or "Open access" if your policy allows. Restrict who can <i>edit</i> <code>apic-prod</code> (group → Security).</p>
+</div></div>
+</div>
+
+<!-- ============================================================ -->
+<div class="section">
+<h2>Part C — Pipeline, policies, permissions</h2>
+
+<div class="step"><div class="n">8</div><div class="body">
+<h3>Create the pipeline and the PR policy</h3>
+<div class="where"><b>Where:</b> <i>Pipelines → New pipeline → Azure Repos Git → APIConnect-catalog → Existing Azure Pipelines YAML file</i> → path <code>/.azure-pipelines/apic-ci.yml</code> → <b>Save</b> (not Run). Rename it to <code>APIConnect-catalog</code> (… → Rename/move).</div>
+<p>Then <i>Repos → Branches → main → … → Branch policies</i>:</p>
+<ul>
+  <li><b>Require a minimum number of reviewers</b>: 1 (or more), "Allow requestors to approve their own changes" off.</li>
+  <li><b>Build validation → +</b>: pipeline <code>APIConnect-catalog</code>, trigger <i>Automatic</i>, policy requirement <i>Required</i>, build expiration <i>Immediately when main is updated</i>. This is what runs the four validation stages on every PR (the YAML <code>pr:</code> block is ignored on Azure Repos).</li>
+  <li>Optional: <b>Automatically included reviewers</b> for <code>projects/*/prod/**</code> (the platform team) — a lightweight prod gate without pipeline approvals.</li>
+</ul>
+<div class="callout warn"><b>Effect of the policy</b> Nobody can push to <code>main</code> directly anymore — including you. Every change, including <code>topology.yml</code> edits, goes through a PR. That is intended.</div>
+</div></div>
+
+<div class="step"><div class="n">9</div><div class="body">
+<h3>Repository permissions for the build identity</h3>
+<div class="where"><b>Where:</b> <i>Project settings → Repositories → APIConnect-catalog → Security</i></div>
+<p>Find <b>&lt;project&gt; Build Service (&lt;collection&gt;)</b> — or <i>Project Collection Build Service</i> if <i>Project settings → Pipelines → Settings → "Limit job authorization scope to current project"</i> is off — and set:</p>
+<table>
+  <tr><th style="width:30%">Permission</th><th style="width:12%">Value</th><th>Why</th></tr>
+  <tr><td>Read</td><td>Allow</td><td>checkout</td></tr>
+  <tr><td>Contribute</td><td>Allow</td><td>push the <code>published/&lt;stage&gt;</code> tags</td></tr>
+  <tr><td>Create tag</td><td>Allow</td><td>same</td></tr>
+  <tr><td>Force push</td><td>Allow</td><td>the tags are moved with <code>git push --force refs/tags/…</code>; branches are protected by the policy anyway</td></tr>
+</table>
+<p class="small">In <i>Project settings → Pipelines → Settings</i> keep "Protect access to repositories in YAML pipelines" on; the pipeline only needs its own repository.</p>
+</div></div>
+
+<div class="step"><div class="n">10</div><div class="body">
+<h3>First run and Environments</h3>
+<div class="where"><b>Where:</b> a PR that touches only <code>projects/example-project/dev/</code> (e.g. edit a description)</div>
+<ol>
+  <li>Open the PR. The <i>Build validation</i> check starts the pipeline; the first time it asks to <b>permit</b> access to the variable groups, secure files and agent pool — click <i>Permit</i> for each. Expect the four stages to pass and the publish stages to be skipped (PR builds never publish).</li>
+  <li>Complete the PR. The merge run validates again and then runs <code>publish_dev</code> and <code>publish_nightly</code> in parallel — both report “No tag published/… yet: bootstrapping” and publish the whole <code>dev/</code> folder. <code>publish_integ</code>, <code>publish_rc</code> and <code>publish_prod</code> also bootstrap their folders; if you do not want that yet, temporarily remove those folders from the example project first.</li>
+  <li><i>Pipelines → Environments</i> now shows <code>apic-dev</code>, <code>apic-nightly</code>, <code>apic-integ</code>, <code>apic-rc</code>, <code>apic-prod</code>. On each: <i>Approvals and checks → +</i> → <b>Exclusive lock</b>. On <code>apic-prod</code> optionally add <b>Approvals</b> with the release managers.</li>
+  <li>In each API Manager confirm the products show <i>Published</i>; call <code>GET /example/health</code> through each gateway ingress with a subscribed application.</li>
+</ol>
+</div></div>
+</div>
+
+<!-- ============================================================ -->
+<div class="section">
+<h2>Checklist and troubleshooting</h2>
+
+<table class="check">
+  <tr><th></th><th>Done when…</th></tr>
+  <tr><td>☐</td><td><code>sudo -iu azagent bash -c 'command -v yamllint spectral yq oasdiff jq apic git'</code> prints seven paths</td></tr>
+  <tr><td>☐</td><td>The agent shows <i>Online</i> in pool <code>apic-linux</code></td></tr>
+  <tr><td>☐</td><td><code>apic catalogs:list --server &lt;ingress.management&gt; --org &lt;org&gt;</code> works from the agent VM for all three instances (after <code>apic iam-apikey</code>)</td></tr>
+  <tr><td>☐</td><td><code>config/topology.yml</code> has no <code>CHANGE ME</code>; <code>AGENT_POOL</code> is set in <code>apic-ci.yml</code></td></tr>
+  <tr><td>☐</td><td>Variable groups <code>apic-shared</code>, <code>apic-dev</code>, <code>apic-test</code>, <code>apic-prod</code> exist; the API keys are padlocked</td></tr>
+  <tr><td>☐</td><td>Three secure files uploaded with the exact names <code>apic-toolkit-credentials-{dev,test,prod}.json</code></td></tr>
+  <tr><td>☐</td><td>Branch policy on <code>main</code>: reviewers + build validation with the pipeline</td></tr>
+  <tr><td>☐</td><td>Build Service has Contribute, Create tag, Force push on the repository</td></tr>
+  <tr><td>☐</td><td>A PR turned green; the merge created <code>published/dev</code> and <code>published/nightly</code> tags (<i>Repos → Tags</i>)</td></tr>
+  <tr><td>☐</td><td>Exclusive lock on the five Environments</td></tr>
+</table>
+
+<h3>If something fails</h3>
+<table>
+  <tr><th style="width:36%">Symptom</th><th>Fix</th></tr>
+  <tr><td>Pipeline never starts on a PR</td><td>Build validation policy missing or set to <i>Optional</i>/manual; the <code>pr:</code> YAML block does nothing on Azure Repos.</td></tr>
+  <tr><td>“No agent found in pool … that satisfies the demands”</td><td><code>AGENT_POOL</code> misspelt, agent offline, or the pipeline is not authorized on the pool (pool → Security → Pipeline permissions).</td></tr>
+  <tr><td>“offline mode: 'X' is not installed on this agent”</td><td>Tool missing for the <i>agent user</i>: rerun <code>install-offline.sh</code>, check <code>/opt/azagent/.env</code> PATH, restart the service (<code>sudo ./svc.sh restart</code>).</td></tr>
+  <tr><td>“the apic toolkit is not on PATH”</td><td>Step 2 not done on this agent, or installed under another user's home. Put it in <code>/usr/local/bin</code>.</td></tr>
+  <tr><td>Variable group / secure file “not authorized”</td><td>Open the run → <i>Permit</i>, or Library → object → Pipeline permissions → add the pipeline.</td></tr>
+  <tr><td>Login: TLS / “self signed certificate in certificate chain”</td><td>Step 3: CA into the OS store and <code>NODE_EXTRA_CA_CERTS</code>; restart the agent service so it picks up <code>/etc/environment</code>.</td></tr>
+  <tr><td>Login: 401 / “user not found”</td><td>The API key's identity is not a member of that instance's provider org, or the key expired. Test interactively with the same <code>ingress.management</code>.</td></tr>
+  <tr><td><code>git push … refs/tags/published/…</code>: TF401027 / permission denied</td><td>Step 9 permissions for the right Build Service identity (project-scoped vs collection-scoped).</td></tr>
+  <tr><td>Stage <i>Skipped</i> although the folder changed</td><td>The change is not under <code>projects/&lt;project&gt;/&lt;folder&gt;/{apis,products}/</code>, or the tag already points at this commit (check <i>Repos → Tags</i>).</td></tr>
+  <tr><td>UniversalPackages / NodeTool task errors</td><td>They should not appear at all: confirm <code>APIC_TOOLKIT_SOURCE=preinstalled</code> and <code>TOOLS_MODE=offline</code>.</td></tr>
+</table>
+
+<div class="callout ok">
+  <b>Day-2 reminders</b>
+  Rotate the three API keys on a schedule (edit the variable, nothing in Git changes). After an API Connect fix-pack upgrade, reinstall the matching
+  toolkit on the agent. To update the tools, rebuild the bundle on a connected machine and rerun <code>install-offline.sh</code>. Ingress changes are a
+  one-line PR to <code>config/topology.yml</code>.
+</div>
+<p class="small muted">APIConnect-catalog on-prem setup runbook · v1.0 · source docs/onprem-setup.html</p>
+</div>
+</body>
+</html>

@@ -13,11 +13,12 @@
 #   Ingress URLs / org of each instance come from config/topology.yml; only the API key and the toolkit
 #   credentials.json live in Azure DevOps (variable group apic-<instance>, Secure File).
 #
-# Required Azure DevOps setup (README "Azure DevOps setup"):
+# Required Azure DevOps setup (README "Azure DevOps setup", docs/onprem-setup.pdf for Azure DevOps Server):
 #   Variable group  apic-shared                        : APIC_TOOLKIT_VERSION, TOOLS_MODE (online|offline)
-#   Variable groups apic-dev / apic-test / apic-prod   : APIC_APIKEY (secret, Key Vault)
+#   Variable groups apic-dev / apic-test / apic-prod   : APIC_APIKEY (secret)
 #   Secure files    apic-toolkit-credentials-dev.json / -test.json / -prod.json
 #   Environments    apic-dev, apic-nightly, apic-integ, apic-rc, apic-prod (approvals optional; exclusive lock recommended)
+#   Agent pool      set AGENT_POOL below (self-hosted) or leave empty for Microsoft-hosted ubuntu-latest
 
 trigger:
   branches:
@@ -34,6 +35,11 @@ pr:
 
 variables:
 - group: apic-shared
+# ---- Agent / toolkit placement: the only two lines to edit for an on-prem Azure DevOps Server ----------------------
+- name: AGENT_POOL
+  value: ''                       # self-hosted Linux pool name, e.g. 'apic-linux'. Empty = Microsoft-hosted ubuntu-latest.
+- name: APIC_TOOLKIT_SOURCE
+  value: preinstalled              # preinstalled = apic is on the agent's PATH | artifacts = Universal Package (hosted agents)
 
 stages:
 # --------------------------------------------------------------------------------------------- validate
@@ -43,12 +49,17 @@ stages:
   - job: validate
     displayName: yaml -> openapi -> apic -> compatibility
     pool:
-      vmImage: ubuntu-latest          # on-prem: replace with  name: <your agent pool>
+      ${{ if ne(variables.AGENT_POOL, '') }}:
+        name: ${{ variables.AGENT_POOL }}
+      ${{ else }}:
+        vmImage: ubuntu-latest
     steps:
     - checkout: self
       fetchDepth: 0                   # full history: needed to diff against the target branch / tags
 
     - template: templates/install-tools.yml
+      parameters:
+        apicSource: ${{ variables.APIC_TOOLKIT_SOURCE }}
 
     - bash: |
         set -euo pipefail
@@ -106,19 +117,19 @@ stages:
 
 # --------------------------------------------------------------------------------------------- dev/ folder
 - template: templates/publish-stage.yml
-  parameters: { stage: dev, folder: dev, instance: dev, catalog: '<project>-dev' }
+  parameters: { stage: dev, folder: dev, instance: dev, catalog: '<project>-dev', agentPool: '${{ variables.AGENT_POOL }}', apicSource: '${{ variables.APIC_TOOLKIT_SOURCE }}' }
 
 - template: templates/publish-stage.yml
-  parameters: { stage: nightly, folder: dev, instance: test, catalog: '<project>-nightly' }
+  parameters: { stage: nightly, folder: dev, instance: test, catalog: '<project>-nightly', agentPool: '${{ variables.AGENT_POOL }}', apicSource: '${{ variables.APIC_TOOLKIT_SOURCE }}' }
 
 # --------------------------------------------------------------------------------------------- integ/ folder
 - template: templates/publish-stage.yml
-  parameters: { stage: integ, folder: integ, instance: dev, catalog: '<project>-integ' }
+  parameters: { stage: integ, folder: integ, instance: dev, catalog: '<project>-integ', agentPool: '${{ variables.AGENT_POOL }}', apicSource: '${{ variables.APIC_TOOLKIT_SOURCE }}' }
 
 # --------------------------------------------------------------------------------------------- rc/ folder
 - template: templates/publish-stage.yml
-  parameters: { stage: rc, folder: rc, instance: test, catalog: '<project>-rc' }
+  parameters: { stage: rc, folder: rc, instance: test, catalog: '<project>-rc', agentPool: '${{ variables.AGENT_POOL }}', apicSource: '${{ variables.APIC_TOOLKIT_SOURCE }}' }
 
 # --------------------------------------------------------------------------------------------- prod/ folder
 - template: templates/publish-stage.yml
-  parameters: { stage: prod, folder: prod, instance: prod, catalog: '<project>' }
+  parameters: { stage: prod, folder: prod, instance: prod, catalog: '<project>', agentPool: '${{ variables.AGENT_POOL }}', apicSource: '${{ variables.APIC_TOOLKIT_SOURCE }}' }
