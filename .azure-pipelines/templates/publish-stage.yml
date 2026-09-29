@@ -65,6 +65,7 @@ stages:
 
           - bash: |
               set -euo pipefail
+              source scripts/lib.sh          # `apic` wrapper: --accept-license, stdin closed, timeout -> never blocks on a prompt
               apic client-creds:set "$(apicCreds.secureFilePath)"
               # Non-interactive login with an IBM Cloud IAM API key (v10.0.8 CLI: `apic iam-apikey`).
               # VERIFY on each instance. Alternative for IBMid/OIDC-only instances:
@@ -117,7 +118,7 @@ stages:
             displayName: Publish logs artifact
             condition: always()
 
-          - bash: apic logout --server "$APIC_SERVER" || true
+          - bash: source scripts/lib.sh; apic logout --server "$APIC_SERVER" || true
             displayName: apic logout
             condition: always()
             env:

@@ -18,7 +18,7 @@ read_list() { cat "$@" 2>/dev/null | sed -e 's/\r$//' -e '/^[[:space:]]*$/d' | s
 require_cmd() {
   local c
   for c in "$@"; do
-    command -v "$c" >/dev/null 2>&1 || { vso_error "Required tool not on PATH: $c"; exit 2; }
+    type -P "$c" >/dev/null 2>&1 || { vso_error "Required tool not on PATH: $c"; exit 2; }
   done
 }
 
@@ -34,6 +34,25 @@ yq_str() { yq -r "$2 // \"\"" "$1" 2>/dev/null; }
 
 # Common APIC connection flags; requires APIC_SERVER and APIC_ORG in the environment
 apic_conn() { echo "--server ${APIC_SERVER} --org ${APIC_ORG}"; }
+
+# Every toolkit call made by the scripts goes through this wrapper:
+#   * stdin from /dev/null   - the toolkit can never block on an interactive prompt (license, usage data, "y/n")
+#   * --accept-license       - non-interactive license acceptance on every call (IBM: "Scripting with the toolkit commands")
+#   * timeout                - a hang (prompt, unreachable server) fails after APIC_TIMEOUT seconds with a clear message
+# Interactive use (e.g. `apic login --sso` in a terminal) is unaffected: this function only exists inside the scripts.
+APIC_TIMEOUT="${APIC_TIMEOUT:-600}"
+apic() {
+  local rc=0
+  if type -P timeout >/dev/null 2>&1; then
+    timeout "$APIC_TIMEOUT" "$(type -P apic)" --accept-license "$@" </dev/null || rc=$?
+  else
+    "$(type -P apic)" --accept-license "$@" </dev/null || rc=$?
+  fi
+  if (( rc == 124 )); then
+    vso_error "apic ${1:-} did not finish within ${APIC_TIMEOUT}s - interactive prompt, or the management server is unreachable"
+  fi
+  return $rc
+}
 
 # resolve_ref PRODUCT_FILE REF -> repo-relative path of a $ref target
 resolve_ref() { realpath -m --relative-to=. "$(dirname "$1")/$2"; }

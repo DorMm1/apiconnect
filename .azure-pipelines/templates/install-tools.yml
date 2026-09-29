@@ -106,5 +106,5 @@ steps:
       fi
     displayName: 'tools: apic on PATH'
 
-- bash: apic --accept-license version
+- bash: apic --accept-license version </dev/null
   displayName: 'tools: apic version'

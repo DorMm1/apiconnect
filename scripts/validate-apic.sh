@@ -16,7 +16,6 @@ mapfile -t PRODUCTS < <(read_list "${1:?products list file required}")
 (( ${#PRODUCTS[@]} )) || { log "Stage 3: no products"; exit 0; }
 
 vso_section "Stage 3 - apic validate (${#PRODUCTS[@]} product(s))"
-apic --accept-license version >/dev/null 2>&1 || true   # accept license once, silently
 rc=0
 
 for p in "${PRODUCTS[@]}"; do
