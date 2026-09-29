@@ -34,7 +34,7 @@ case "$MODE" in
   *) vso_error "--mode must be git or live"; exit 2 ;;
 esac
 
-mapfile -t APIS < <("$(dirname "$0")/product-apis.sh" --list "$LIST")
+mapfile -t APIS < <(bash "$(dirname "$0")/product-apis.sh" --list "$LIST")
 (( ${#APIS[@]} )) || { log "Stage 4: no API files"; exit 0; }
 
 mkdir -p out/compat

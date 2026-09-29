@@ -46,7 +46,7 @@ case "$MODE" in
     [[ -n "$BASE" ]] || { vso_error "--base required in pr mode"; exit 2; }
     for folder in $(list_folders); do
       echo "$BASE" > "$OUT/base.$folder"
-      "$HERE/changed-products.sh" "$BASE" HEAD "$OUT/products.$folder.txt" --folder "$folder"
+      bash "$HERE/changed-products.sh" "$BASE" HEAD "$OUT/products.$folder.txt" --folder "$folder"
     done
     ;;
   main)
@@ -55,11 +55,11 @@ case "$MODE" in
       base=$(tag_base "$first")
       echo "$base" > "$OUT/base.$folder"
       log "folder '$folder': baseline = published/$first -> $(describe_base "$base")"
-      "$HERE/changed-products.sh" "$base" HEAD "$OUT/products.$folder.txt" --folder "$folder"
+      bash "$HERE/changed-products.sh" "$base" HEAD "$OUT/products.$folder.txt" --folder "$folder"
     done
     for stage in $(list_stages); do
       folder=$(stage_folder "$stage"); sbase=$(tag_base "$stage")
-      "$HERE/changed-products.sh" "$sbase" HEAD "$OUT/.stage.$stage.txt" --folder "$folder" >/dev/null 2>&1
+      bash "$HERE/changed-products.sh" "$sbase" HEAD "$OUT/.stage.$stage.txt" --folder "$folder" >/dev/null 2>&1
       if [[ -s "$OUT/.stage.$stage.txt" ]]; then echo "$stage true"; else echo "$stage false"; fi >> "$OUT/stages.txt"
       rm -f "$OUT/.stage.$stage.txt"
     done
@@ -75,11 +75,11 @@ case "$MODE" in
     else
       log "stage '$STAGE' (folder '$folder' -> instance '$(stage_instance "$STAGE")'): last publish = $(describe_base "$base")"
     fi
-    "$HERE/changed-products.sh" "$base" HEAD "$OUT/products.$folder.txt" --folder "$folder"
+    bash "$HERE/changed-products.sh" "$base" HEAD "$OUT/products.$folder.txt" --folder "$folder"
     ;;
   *) vso_error "--mode must be pr, main or stage"; exit 2 ;;
 esac
 
 cat "$OUT"/products.*.txt 2>/dev/null | sed '/^$/d' | sort -u > "$OUT/products.txt"
-"$HERE/product-apis.sh" --list "$OUT/products.txt" > "$OUT/apis.txt"
+bash "$HERE/product-apis.sh" --list "$OUT/products.txt" > "$OUT/apis.txt"
 log "Total: $(wc -l < "$OUT/products.txt") product(s), $(wc -l < "$OUT/apis.txt") API file(s)"

@@ -14,7 +14,7 @@ for f in "$DIR"/products.*.txt; do
   base=$(cat "$DIR/base.$folder")
   log "Folder '$folder' (published by: $(folder_stages "$folder" | tr '\n' ' ')): baseline $base"
   ran=1
-  "$(dirname "$0")/compat-check.sh" --mode git --base "$base" "$f" || rc=1
+  bash "$(dirname "$0")/compat-check.sh" --mode git --base "$base" "$f" || rc=1
 done
 (( ran )) || log "Stage 4: nothing to compare"
 exit $rc

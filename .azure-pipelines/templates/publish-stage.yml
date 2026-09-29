@@ -54,7 +54,7 @@ stages:
             parameters:
               apicSource: ${{ parameters.apicSource }}
 
-          - bash: scripts/stage-env.sh --stage "${{ parameters.stage }}" --vso
+          - bash: bash scripts/stage-env.sh --stage "${{ parameters.stage }}" --vso
             displayName: Resolve instance ingress from config/topology.yml
 
           - task: DownloadSecureFile@1
@@ -78,16 +78,16 @@ stages:
               APIC_SERVER: $(APIC_SERVER)
               APIC_APIKEY: $(APIC_APIKEY)       # secret: only ever passed through env
 
-          - bash: scripts/changeset.sh --mode stage --stage "${{ parameters.stage }}" out/cs
+          - bash: bash scripts/changeset.sh --mode stage --stage "${{ parameters.stage }}" out/cs
             displayName: Change set of ${{ parameters.folder }}/ since published/${{ parameters.stage }}
 
-          - bash: scripts/compat-check.sh --mode live --stage "${{ parameters.stage }}" out/cs/products.txt
+          - bash: bash scripts/compat-check.sh --mode live --stage "${{ parameters.stage }}" out/cs/products.txt
             displayName: "4' Compatibility vs live catalogs"
             env:
               APIC_SERVER: $(APIC_SERVER)
               APIC_ORG: $(APIC_ORG)
 
-          - bash: scripts/publish.sh --stage "${{ parameters.stage }}" out/cs/products.txt
+          - bash: bash scripts/publish.sh --stage "${{ parameters.stage }}" out/cs/products.txt
             displayName: apic products:publish
             env:
               APIC_SERVER: $(APIC_SERVER)

@@ -37,7 +37,7 @@
 
 <div class="header">
   <div><h1>On-prem setup runbook</h1><div class="muted">APIConnect-catalog on Azure DevOps Server with a self-hosted Linux agent</div></div>
-  <div class="meta">v1.1 · 29 September 2026<br>companion to guide.pdf (sections 12–13)</div>
+  <div class="meta">v1.2 · 29 September 2026<br>companion to guide.pdf (sections 12–13)</div>
 </div>
 
 <p>This runbook takes you from the offline bundle to the first successful publish on an <b>on-prem Azure DevOps Server</b>
@@ -128,6 +128,9 @@ cd APIConnect-catalog
 git remote add origin https://&lt;ado-server&gt;/tfs/DefaultCollection/&lt;project&gt;/_git/APIConnect-catalog
 git push -u origin main</pre>
 <p>Then set <code>main</code> as the default branch (<i>Repos → Branches → … → Set as default branch</i>) if it is not already.</p>
+<p class="small">Use the <code>.gitbundle</code>, not the plain <code>repo/</code> folder, when the pushing machine is Windows: <code>git add</code> on Windows stores every file as
+<code>644</code>, so the scripts lose their exec bit. The pipeline invokes every script through <code>bash</code> and does not depend on that bit, but if you did import
+<code>repo/</code>, restore it anyway: <code>git update-index --chmod=+x scripts/*.sh tools/*.sh &amp;&amp; git commit -m "exec bits"</code>.</p>
 </div></div>
 
 <div class="step"><div class="n">6</div><div class="body">
@@ -282,7 +285,8 @@ apic catalogs:list --server "$MGMT" --org "$ORG"            <span class="c"># mu
   <tr><td>Pipeline never starts on a PR</td><td>Build validation policy missing or set to <i>Optional</i>/manual; the <code>pr:</code> YAML block does nothing on Azure Repos.</td></tr>
   <tr><td>“No agent found in pool … that satisfies the demands”</td><td><code>AGENT_POOL</code> misspelt, agent offline, or the pipeline is not authorized on the pool (pool → Security → Pipeline permissions).</td></tr>
   <tr><td>“offline mode: 'X' is not installed on this agent”</td><td>Tool missing for the <i>agent user</i>: rerun <code>install-offline.sh</code>, check <code>/opt/azagent/.env</code> PATH, restart the service (<code>sudo ./svc.sh restart</code>).</td></tr>
-  <tr><td>“the apic toolkit is not on PATH”</td><td>Step 2 not done on this agent, or installed under another user's home. Put it in <code>/usr/local/bin</code>.</td></tr>
+  <tr><td><code>scripts/changeset.sh: Permission denied</code> (or any script)</td><td>Either the scripts lost their exec bit when the repo was imported from Windows (see the note in step 5 — the pipeline now runs <code>bash scripts/…</code>, so update to the current <code>apic-ci.yml</code> / <code>publish-stage.yml</code>), or the agent's work folder is owned by another user: you ran the agent once as <code>root</code> before installing the service as <code>azagent</code>. Fix: <code>sudo ./svc.sh stop &amp;&amp; sudo chown -R azagent:azagent /opt/azagent &amp;&amp; sudo ./svc.sh start</code>. In a custom container image, make sure the agent user can write <code>_work</code> and that <code>bash</code>, <code>git</code> and <code>realpath</code> (coreutils) are present.</td></tr>
+    <tr><td>“the apic toolkit is not on PATH”</td><td>Step 2 not done on this agent, or installed under another user's home. Put it in <code>/usr/local/bin</code>.</td></tr>
   <tr><td>Variable group / secure file “not authorized”</td><td>Open the run → <i>Permit</i>, or Library → object → Pipeline permissions → add the pipeline.</td></tr>
   <tr><td>Login: TLS / “self signed certificate in certificate chain”</td><td>Step 3: CA into the OS store and <code>NODE_EXTRA_CA_CERTS</code>; restart the agent service so it picks up <code>/etc/environment</code>.</td></tr>
   <tr><td>Login: 401 / “user not found” / “invalid api key”</td><td>The key's identity is not a member of that instance's provider org, the key expired (<code>ttl</code>), or it was a single-use browser key. Recreate with step 7b and test interactively with the same <code>ingress.management</code>. Also check that the login <i>command</i> matches the key type (<code>iam-apikey</code> vs <code>login --sso --apiKey</code>).</td></tr>
@@ -297,7 +301,7 @@ apic catalogs:list --server "$MGMT" --org "$ORG"            <span class="c"># mu
   toolkit on the agent. To update the tools, rebuild the bundle on a connected machine and rerun <code>install-offline.sh</code>. Ingress changes are a
   one-line PR to <code>config/topology.yml</code>.
 </div>
-<p class="small muted">APIConnect-catalog on-prem setup runbook · v1.1 · source docs/onprem-setup.html</p>
+<p class="small muted">APIConnect-catalog on-prem setup runbook · v1.2 · source docs/onprem-setup.html</p>
 </div>
 </body>
 </html>
