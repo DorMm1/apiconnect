@@ -162,8 +162,8 @@ each stage       : resolve ingress/org from topology.yml -> login to the instanc
 
 ## On-prem: Azure DevOps Server + offline agent
 
-Follow **`docs/onprem-setup.pdf`** - a 10-step runbook (agent, certificates, repo import, library, pipeline,
-branch policy, permissions, first run). In short:
+Follow **`docs/onprem-setup.pdf`** - an 11-step runbook (agent, certificates, repo import, API Connect
+credentials, library, pipeline, branch policy, permissions, first run). In short:
 
 ```bash
 sudo bash tools/install-offline.sh                 # bundle tools -> /usr/local/bin, yamllint via pip --no-index

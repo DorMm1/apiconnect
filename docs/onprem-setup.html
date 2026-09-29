@@ -37,7 +37,7 @@
 
 <div class="header">
   <div><h1>On-prem setup runbook</h1><div class="muted">APIConnect-catalog on Azure DevOps Server with a self-hosted Linux agent</div></div>
-  <div class="meta">v1.0 · 28 September 2026<br>companion to guide.pdf (sections 12–13)</div>
+  <div class="meta">v1.1 · 29 September 2026<br>companion to guide.pdf (sections 12–13)</div>
 </div>
 
 <p>This runbook takes you from the offline bundle to the first successful publish on an <b>on-prem Azure DevOps Server</b>
@@ -47,7 +47,7 @@ Every step lists <i>where</i> to click and <i>what</i> to enter. Estimated time:
 <h3>What is different on Azure DevOps Server</h3>
 <table>
   <tr><th style="width:32%">Topic</th><th>On Azure DevOps Server</th></tr>
-  <tr><td>PR validation</td><td>The <code>pr:</code> block in <code>apic-ci.yml</code> is ignored for Azure Repos. PR builds are configured with a <b>branch policy → Build validation</b> on <code>main</code> (step 8).</td></tr>
+  <tr><td>PR validation</td><td>The <code>pr:</code> block in <code>apic-ci.yml</code> is ignored for Azure Repos. PR builds are configured with a <b>branch policy → Build validation</b> on <code>main</code> (step 9).</td></tr>
   <tr><td>Secrets</td><td>No Azure Key Vault. <code>APIC_APIKEY</code> is a <b>secret variable</b> (padlock) in the variable group; it is encrypted at rest and masked in logs.</td></tr>
   <tr><td>Agents</td><td>No Microsoft-hosted pool. Set <code>AGENT_POOL</code> in <code>apic-ci.yml</code> to your self-hosted pool (step 6). Tools come from the bundle (<code>TOOLS_MODE=offline</code>).</td></tr>
   <tr><td>Toolkit</td><td>Installed on the agent; <code>APIC_TOOLKIT_SOURCE=preinstalled</code>. The Azure Artifacts task is not even included in the compiled pipeline.</td></tr>
@@ -60,8 +60,8 @@ Every step lists <i>where</i> to click and <i>what</i> to enter. Estimated time:
   <ul style="margin-bottom:0">
     <li>The bundle <code>APIConnect-catalog-bundle-&lt;date&gt;.zip</code> and its <code>.sha256</code>.</li>
     <li>A Linux x64 VM for the agent (2 vCPU / 4 GB is plenty): bash 5, git ≥ 2.30, Python 3.9+ with pip, <code>unzip</code>, <code>sha256sum</code>, outbound HTTPS to the Azure DevOps Server and to the three API Connect management ingresses.</li>
-    <li>From each API Connect instance's API Manager → <i>Tools for download</i>: the Linux CLI and <code>credentials.json</code> (3×).</li>
-    <li>One IBM Cloud / toolkit API key per instance for a service identity that is a member of that instance's provider org with a publish role (3×).</li>
+    <li>From each API Connect instance's API Manager: the Linux CLI, <code>credentials.json</code> and a long-lived toolkit API key (3×) — step 7 explains how to obtain them.</li>
+    <li>A technical user per instance that is a member of the provider org with a publish role, and a Cloud Manager admin available once per instance (to allow reusable API keys).</li>
     <li>Azure DevOps Server: rights to create a project/repo, agent pool, variable groups, secure files, pipelines and branch policies (Project Administrator).</li>
   </ul>
 </div>
@@ -145,17 +145,72 @@ git push -u origin main</pre>
 </div></div>
 
 <div class="step"><div class="n">7</div><div class="body">
+<h3>Get the API Connect credentials — per instance (dev, test, prod)</h3>
+<div class="where"><b>Where:</b> API Manager of each instance (browser) and a shell with the toolkit, e.g. the agent VM. Two things are needed per instance:
+<code>credentials.json</code> (identifies the <i>toolkit</i> as an OAuth client) and <code>APIC_APIKEY</code> (identifies the <i>user</i> the pipeline publishes as).</div>
+
+<h3 style="font-size:10.5pt">7a · credentials.json</h3>
+<ol>
+  <li>Open <code>https://&lt;management-ingress&gt;/manager</code>, log in.</li>
+  <li>Home page → <b>Download toolkit</b> (older builds: <i>Tools for download</i> / <i>Help → Download toolkit</i>).</li>
+  <li>In the dialog, <i>Step 2: Download credentials</i> → <b>Download</b> next to <i>Credential</i>. Ignore <i>API Designer Credentials</i>.</li>
+  <li>Rename the file per instance — the name is how the pipeline finds it:
+    <code>apic-toolkit-credentials-dev.json</code>, <code>apic-toolkit-credentials-test.json</code>, <code>apic-toolkit-credentials-prod.json</code>.</li>
+</ol>
+<p class="small">The file is per instance (dev's does not work against test's manager) and contains no user identity. If the download link is missing, your user lacks the permission — a Cloud Manager admin can download it from <i>Cloud Manager → Settings → Toolkit</i>.</p>
+
+<h3 style="font-size:10.5pt">7b · APIC_APIKEY — a long-lived toolkit API key</h3>
+<p>The key is issued by the instance itself. Keys from the browser sign-in page (<code>…/auth/manager/sign-in/?from=TOOLKIT</code>) are single-use and expire
+in minutes — fine for a manual test, useless for a pipeline. Create a long-lived one instead (commands verified against the v10.0.8 CLI reference):</p>
+<pre>MGMT=https://&lt;management-ingress&gt;      <span class="c"># ingress.management of this instance in config/topology.yml</span>
+ORG=&lt;provider-org&gt;
+
+<span class="c"># 1. Allow reusable keys - Cloud Manager admin, once per instance</span>
+cat &gt; cloud-settings.yaml &lt;&lt;'EOF'
+api_key_enabled: true
+api_key_multiple_uses: true
+api_key_expires_in: 31536000
+EOF
+apic login --server "$MGMT" --sso --context admin          <span class="c"># open the printed URL, log in, paste the key back</span>
+apic cloud-settings:update --server "$MGMT" cloud-settings.yaml
+
+<span class="c"># 2. Create the key - logged in as the technical user the pipeline will publish as</span>
+cat &gt; pipeline-key.yaml &lt;&lt;'EOF'
+client_type: toolkit
+name: azure-pipeline
+description: Azure DevOps publish key
+ttl: 31536000
+EOF
+apic login --server "$MGMT" --sso --context provider       <span class="c"># browser URL again, as the technical user</span>
+apic api-keys:create --server "$MGMT" pipeline-key.yaml    <span class="c"># output contains  api_key: xxxxxxxx-....  = APIC_APIKEY</span>
+
+<span class="c"># 3. Test key + credentials.json together</span>
+apic logout --server "$MGMT"
+apic client-creds:clear && apic client-creds:set ./apic-toolkit-credentials-dev.json
+apic login --server "$MGMT" --sso --context provider --apiKey '&lt;api_key&gt;'
+apic catalogs:list --server "$MGMT" --org "$ORG"            <span class="c"># must list the project catalogs</span></pre>
+<ul>
+  <li><code>ttl: 31536000</code> = 1 year. Put the expiry date in your calendar; an expired key fails the login step with an unhelpful message.</li>
+  <li>The key inherits the permissions of the user who created it: that user must be a member of the provider org with a publish-capable role (Developer / Administrator, or a custom role with <code>product:manage</code>).</li>
+  <li>Registry without SSO (local user registry or LDAP)? Then there is no API key: the pipeline needs <code>--username / --password / --realm provider/&lt;idp&gt;</code> instead — <code>apic identity-providers:list --server "$MGMT" --scope provider --fields realm</code> shows what you have. Adjust the login step accordingly.</li>
+</ul>
+<div class="callout warn"><b>Match the login command to the key</b> The pipeline's login step in <code>templates/publish-stage.yml</code> ships as
+<code>apic iam-apikey …</code>, which is for IBM Cloud IAM keys (SaaS). For a toolkit key created as above the line must be
+<code>apic login --server "$APIC_SERVER" --sso --context provider --apiKey "$APIC_APIKEY"</code> — change it in a PR before the first publish.</div>
+</div></div>
+
+<div class="step"><div class="n">8</div><div class="body">
 <h3>Library: variable groups and secure files</h3>
 <div class="where"><b>Where:</b> <i>Pipelines → Library</i></div>
 <table>
   <tr><th style="width:30%">Object</th><th>Content</th></tr>
   <tr><td>Variable group <code>apic-shared</code></td><td><code>TOOLS_MODE</code> = <code>offline</code> · <code>APIC_TOOLKIT_VERSION</code> = e.g. <code>10.0.8.9</code> (informational)</td></tr>
-  <tr><td>Variable group <code>apic-dev</code></td><td><code>APIC_APIKEY</code> = API key of the dev instance's publishing identity — <b>click the padlock</b> to make it secret</td></tr>
+  <tr><td>Variable group <code>apic-dev</code></td><td><code>APIC_APIKEY</code> = the dev instance's key from step 7b — <b>click the padlock</b> to make it secret</td></tr>
   <tr><td>Variable group <code>apic-test</code></td><td><code>APIC_APIKEY</code> for the test instance (secret)</td></tr>
   <tr><td>Variable group <code>apic-prod</code></td><td><code>APIC_APIKEY</code> for the prod instance (secret)</td></tr>
-  <tr><td>Secure files (tab <i>Secure files</i>)</td><td>Upload the three <code>credentials.json</code> as <code>apic-toolkit-credentials-dev.json</code>, <code>apic-toolkit-credentials-test.json</code>, <code>apic-toolkit-credentials-prod.json</code> (rename before upload — the file name is the identifier).</td></tr>
+  <tr><td>Secure files (tab <i>Secure files</i>)</td><td><b>+ Secure file</b> → upload the three files from step 7a: <code>apic-toolkit-credentials-dev.json</code>, <code>apic-toolkit-credentials-test.json</code>, <code>apic-toolkit-credentials-prod.json</code>.</td></tr>
 </table>
-<p class="small">On each group and file: <i>Pipeline permissions</i> → either authorize the <code>APIConnect-catalog</code> pipeline after you created it (step 8), or "Open access" if your policy allows. Restrict who can <i>edit</i> <code>apic-prod</code> (group → Security).</p>
+<p class="small">On each group and file: <i>Pipeline permissions</i> → either authorize the <code>APIConnect-catalog</code> pipeline after you created it (step 9), or "Open access" if your policy allows. Restrict who can <i>edit</i> <code>apic-prod</code> (group → Security).</p>
 </div></div>
 </div>
 
@@ -163,7 +218,7 @@ git push -u origin main</pre>
 <div class="section">
 <h2>Part C — Pipeline, policies, permissions</h2>
 
-<div class="step"><div class="n">8</div><div class="body">
+<div class="step"><div class="n">9</div><div class="body">
 <h3>Create the pipeline and the PR policy</h3>
 <div class="where"><b>Where:</b> <i>Pipelines → New pipeline → Azure Repos Git → APIConnect-catalog → Existing Azure Pipelines YAML file</i> → path <code>/.azure-pipelines/apic-ci.yml</code> → <b>Save</b> (not Run). Rename it to <code>APIConnect-catalog</code> (… → Rename/move).</div>
 <p>Then <i>Repos → Branches → main → … → Branch policies</i>:</p>
@@ -175,7 +230,7 @@ git push -u origin main</pre>
 <div class="callout warn"><b>Effect of the policy</b> Nobody can push to <code>main</code> directly anymore — including you. Every change, including <code>topology.yml</code> edits, goes through a PR. That is intended.</div>
 </div></div>
 
-<div class="step"><div class="n">9</div><div class="body">
+<div class="step"><div class="n">10</div><div class="body">
 <h3>Repository permissions for the build identity</h3>
 <div class="where"><b>Where:</b> <i>Project settings → Repositories → APIConnect-catalog → Security</i></div>
 <p>Find <b>&lt;project&gt; Build Service (&lt;collection&gt;)</b> — or <i>Project Collection Build Service</i> if <i>Project settings → Pipelines → Settings → "Limit job authorization scope to current project"</i> is off — and set:</p>
@@ -189,7 +244,7 @@ git push -u origin main</pre>
 <p class="small">In <i>Project settings → Pipelines → Settings</i> keep "Protect access to repositories in YAML pipelines" on; the pipeline only needs its own repository.</p>
 </div></div>
 
-<div class="step"><div class="n">10</div><div class="body">
+<div class="step"><div class="n">11</div><div class="body">
 <h3>First run and Environments</h3>
 <div class="where"><b>Where:</b> a PR that touches only <code>projects/example-project/dev/</code> (e.g. edit a description)</div>
 <ol>
@@ -211,6 +266,8 @@ git push -u origin main</pre>
   <tr><td>☐</td><td>The agent shows <i>Online</i> in pool <code>apic-linux</code></td></tr>
   <tr><td>☐</td><td><code>apic catalogs:list --server &lt;ingress.management&gt; --org &lt;org&gt;</code> works from the agent VM for all three instances (after <code>apic iam-apikey</code>)</td></tr>
   <tr><td>☐</td><td><code>config/topology.yml</code> has no <code>CHANGE ME</code>; <code>AGENT_POOL</code> is set in <code>apic-ci.yml</code></td></tr>
+  <tr><td>☐</td><td>Per instance: <code>credentials.json</code> downloaded and renamed; long-lived API key created and tested with <code>apic catalogs:list</code> (step 7)</td></tr>
+  <tr><td>☐</td><td>Login step in <code>templates/publish-stage.yml</code> matches the key type (<code>apic login --sso --apiKey</code> for toolkit keys)</td></tr>
   <tr><td>☐</td><td>Variable groups <code>apic-shared</code>, <code>apic-dev</code>, <code>apic-test</code>, <code>apic-prod</code> exist; the API keys are padlocked</td></tr>
   <tr><td>☐</td><td>Three secure files uploaded with the exact names <code>apic-toolkit-credentials-{dev,test,prod}.json</code></td></tr>
   <tr><td>☐</td><td>Branch policy on <code>main</code>: reviewers + build validation with the pipeline</td></tr>
@@ -228,8 +285,8 @@ git push -u origin main</pre>
   <tr><td>“the apic toolkit is not on PATH”</td><td>Step 2 not done on this agent, or installed under another user's home. Put it in <code>/usr/local/bin</code>.</td></tr>
   <tr><td>Variable group / secure file “not authorized”</td><td>Open the run → <i>Permit</i>, or Library → object → Pipeline permissions → add the pipeline.</td></tr>
   <tr><td>Login: TLS / “self signed certificate in certificate chain”</td><td>Step 3: CA into the OS store and <code>NODE_EXTRA_CA_CERTS</code>; restart the agent service so it picks up <code>/etc/environment</code>.</td></tr>
-  <tr><td>Login: 401 / “user not found”</td><td>The API key's identity is not a member of that instance's provider org, or the key expired. Test interactively with the same <code>ingress.management</code>.</td></tr>
-  <tr><td><code>git push … refs/tags/published/…</code>: TF401027 / permission denied</td><td>Step 9 permissions for the right Build Service identity (project-scoped vs collection-scoped).</td></tr>
+  <tr><td>Login: 401 / “user not found” / “invalid api key”</td><td>The key's identity is not a member of that instance's provider org, the key expired (<code>ttl</code>), or it was a single-use browser key. Recreate with step 7b and test interactively with the same <code>ingress.management</code>. Also check that the login <i>command</i> matches the key type (<code>iam-apikey</code> vs <code>login --sso --apiKey</code>).</td></tr>
+  <tr><td><code>git push … refs/tags/published/…</code>: TF401027 / permission denied</td><td>Step 10 permissions for the right Build Service identity (project-scoped vs collection-scoped).</td></tr>
   <tr><td>Stage <i>Skipped</i> although the folder changed</td><td>The change is not under <code>projects/&lt;project&gt;/&lt;folder&gt;/{apis,products}/</code>, or the tag already points at this commit (check <i>Repos → Tags</i>).</td></tr>
   <tr><td>UniversalPackages / NodeTool task errors</td><td>They should not appear at all: confirm <code>APIC_TOOLKIT_SOURCE=preinstalled</code> and <code>TOOLS_MODE=offline</code>.</td></tr>
 </table>
@@ -240,7 +297,7 @@ git push -u origin main</pre>
   toolkit on the agent. To update the tools, rebuild the bundle on a connected machine and rerun <code>install-offline.sh</code>. Ingress changes are a
   one-line PR to <code>config/topology.yml</code>.
 </div>
-<p class="small muted">APIConnect-catalog on-prem setup runbook · v1.0 · source docs/onprem-setup.html</p>
+<p class="small muted">APIConnect-catalog on-prem setup runbook · v1.1 · source docs/onprem-setup.html</p>
 </div>
 </body>
 </html>
