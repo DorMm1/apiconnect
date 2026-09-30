@@ -44,6 +44,7 @@ config/
   spectral.yml                 stage 2 rules (OAS 3.0 + APIC-specific)
   compat-ignore.txt            stage 4 reviewed exceptions (oasdiff --err-ignore)
 scripts/                       everything the pipeline runs; usable locally (see below)
+tests/e2e/                     end-to-end suite: runs the whole flow in a Linux container against a fake toolkit
 tools/install-offline.sh       installs the bundled tools on an on-prem (offline) Linux x64 agent
 docs/guide.pdf                 the readable guide (docs/guide.html is the source)
 docs/onprem-setup.pdf          step-by-step runbook for Azure DevOps Server + self-hosted agent
@@ -210,6 +211,24 @@ scripts/validate-compat.sh out/cs                             # 4, per folder
 scripts/promote.sh example-project dev integ                  # promotion: copies dev/ -> integ/, shows the diff
 eval "$(scripts/stage-env.sh --stage rc)"                     # APIC_SERVER / APIC_ORG of the instance behind a stage
 ```
+
+### End-to-end test suite (`tests/e2e/`)
+
+Runs every pipeline step (change set, stages 1-4, stage-env, login, compat vs live catalog, publish, tag) in a
+throw-away clone inside a Linux container that mimics an agent - stdin kept open, tools from the offline bundle.
+`tests/e2e/fake-apic` stands in for the toolkit: it reproduces the per-call license prompt (blocks without
+`--accept-license`) and keeps a simulated catalog for `products:publish/get` and `apis:list/get`. Nothing is
+written to a real API Connect instance.
+
+```bash
+cp -r <extracted-bundle>/tools/linux-x64 tools/          # offline binaries (git-ignored)
+docker build -f tests/e2e/Dockerfile -t apic-e2e .
+docker run --rm -v "$PWD:/src:ro" apic-e2e               # PowerShell: -v "${PWD}:/src:ro"
+```
+
+On your own agent image with the real `apic`, the same script runs the validate flow (stages 0-4) against the real
+toolkit and skips the publish sections automatically - the quickest way to prove the image never blocks on a prompt:
+`docker run --rm -v "$PWD:/src:ro" <agent-image> bash /src/tests/e2e/run-tests.sh`.
 
 ## Adding an API
 

@@ -29,11 +29,13 @@ done
 
 echo "== Installing yamllint from bundled wheels"
 PY="${PYTHON:-python3}"
+pip_install() { "$PY" -m pip install --quiet --no-index --find-links "$TOOLS_DIR/wheels" "$@" yamllint; }
 if ! command -v "$PY" >/dev/null 2>&1; then
   echo "WARNING: python3 not found - yamllint (stage 1) not installed. Install Python 3.9+ and re-run." >&2
 else
-  "$PY" -m pip install --quiet --no-index --find-links "$TOOLS_DIR/wheels" yamllint \
-    || "$PY" -m pip install --quiet --user --no-index --find-links "$TOOLS_DIR/wheels" yamllint
+  # Debian 12+ / Ubuntu 23.04+ mark the system Python "externally managed" (PEP 668) and refuse plain pip installs;
+  # on a dedicated agent image --break-system-packages is the intended override. Last resort: per-user install.
+  pip_install 2>/dev/null || pip_install --break-system-packages 2>/dev/null || pip_install --user
   printf '   %-8s %s\n' yamllint "$("$PY" -m yamllint --version 2>&1)"
   command -v yamllint >/dev/null 2>&1 || echo "NOTE: add \$($PY -m site --user-base)/bin to PATH so 'yamllint' resolves for the agent user"
 fi

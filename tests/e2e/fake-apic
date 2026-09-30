@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# fake-apic - stand-in for the IBM API Connect 10.0.8 toolkit, used ONLY by tests/e2e (never by the pipeline).
+#
+# Reproduces what was observed on the real agent:
+#   * without --accept-license EVERY call prompts on stdin: it blocks while stdin is open and continues on EOF
+#     (which is exactly what happened when the Azure DevOps job was cancelled)
+#   * acceptance is not persisted between calls (no ~/.apiconnect)
+# Catalog state (published products / API definitions) and a call log live in $FAKE_APIC_STATE.
+#   FAKE_APIC_SLEEP=<s>   delay every call (timeout tests)
+#   FAKE_APIC_ENVELOPE=1  apis:get returns {api: <definition>} instead of the bare definition
+set -uo pipefail
+STATE="${FAKE_APIC_STATE:-/tmp/fake-apic}"; mkdir -p "$STATE"
+printf '%s\n' "$*" >> "$STATE/calls.log"
+
+ACCEPT=0; ARGS=()
+for a in "$@"; do if [[ "$a" == --accept-license ]]; then ACCEPT=1; else ARGS+=("$a"); fi; done
+if (( ! ACCEPT )); then
+  printf 'You must accept the IBM API Connect license to continue. Accept? (y/n) ' >&2
+  IFS= read -r _ans || true
+fi
+[[ -n "${FAKE_APIC_SLEEP:-}" ]] && sleep "$FAKE_APIC_SLEEP"
+
+CMD="${ARGS[0]:-}"; ARGS=("${ARGS[@]:1}")
+SERVER=""; ORG=""; CATALOG=""; FORMAT=""; MIGRATE=0; POS=()
+i=0
+while (( i < ${#ARGS[@]} )); do
+  a="${ARGS[$i]}"
+  case "$a" in
+    --server|-s)   SERVER="${ARGS[$((i+1))]}";  i=$((i+2)) ;;
+    --org|-o)      ORG="${ARGS[$((i+1))]}";     i=$((i+2)) ;;
+    --catalog|-c)  CATALOG="${ARGS[$((i+1))]}"; i=$((i+2)) ;;
+    --format)      FORMAT="${ARGS[$((i+1))]}";  i=$((i+2)) ;;
+    --scope|--fields|--output|--apiKey|--context|--realm|--username|--password) i=$((i+2)) ;;
+    --migrate_subscriptions) MIGRATE=1; i=$((i+1)) ;;
+    --sso|--live-help=*)     i=$((i+1)) ;;
+    -*) echo "Error: unknown option '$a'" >&2; exit 2 ;;
+    *)  POS+=("$a"); i=$((i+1)) ;;
+  esac
+done
+
+need_conn() { [[ -n "$SERVER" && -n "$ORG" ]] || { echo "Error: --server and --org are required" >&2; exit 2; }; }
+need_cat()  { [[ -n "$CATALOG" ]] || { echo "Error: --catalog is required" >&2; exit 2; }; }
+cat_dir()   { echo "$STATE/catalogs/$SERVER/$ORG/$CATALOG"; }
+
+case "$CMD" in
+  version)
+    echo "apic version 10.0.8.9 (fake toolkit for pipeline tests)" ;;
+
+  validate)
+    f="${POS[0]:-}"; [[ -n "$f" ]] || { echo "Error: file argument required" >&2; exit 2; }
+    [[ -f "$f" ]] || { echo "Error: file not found: $f" >&2; exit 1; }
+    yq -e '.' "$f" >/dev/null 2>&1 || { echo "Error: $f is not valid YAML" >&2; exit 1; }
+    if [[ -n "$(yq -r '.product // ""' "$f")" ]]; then
+      [[ -n "$(yq -r '.info.name // ""' "$f")" ]] || { echo "Error: product info.name is required" >&2; exit 1; }
+      while IFS= read -r ref; do
+        [[ -n "$ref" ]] || continue
+        t="$(dirname "$f")/$ref"
+        [[ -f "$t" ]] || { echo "Error: referenced API not found: $t" >&2; exit 1; }
+        yq -e '.openapi // .swagger' "$t" >/dev/null 2>&1 || { echo "Error: $t is not an OpenAPI definition" >&2; exit 1; }
+        echo "Validated $(realpath -m --relative-to=. "$t")"
+      done < <(yq -r '.apis[]."$ref" // ""' "$f")
+    fi
+    echo "Validated $f" ;;
+
+  client-creds:set) echo "Client credentials set" ;;
+  iam-apikey|login)  echo "Logged into ${SERVER:-?} successfully" ;;
+  logout)            echo "Logged out of ${SERVER:-?}" ;;
+
+  catalogs:list)
+    need_conn; printf -- '- name: example-project-dev\n- name: example-project-integ\n' ;;
+
+  products:get)
+    need_conn; need_cat
+    nv="${POS[0]:-}"; f="$(cat_dir)/products/$nv.json"
+    [[ -f "$f" ]] || { echo "Error: Not found: product $nv in catalog $CATALOG" >&2; exit 1; }
+    cat "$f" ;;
+
+  products:publish)
+    need_conn; need_cat
+    f="${POS[0]:-}"; [[ -f "$f" ]] || { echo "Error: product file not found: $f" >&2; exit 1; }
+    name=$(yq -r '.info.name' "$f"); ver=$(yq -r '.info.version' "$f")
+    d="$(cat_dir)"; mkdir -p "$d/products" "$d/apis"
+    while IFS= read -r ref; do
+      [[ -n "$ref" ]] || continue
+      t="$(dirname "$f")/$ref"
+      an=$(yq -r '.info["x-ibm-name"]' "$t"); av=$(yq -r '.info.version' "$t")
+      cp "$t" "$d/apis/$an:$av.yaml"
+    done < <(yq -r '.apis[]."$ref" // ""' "$f")
+    printf '{"type":"product","name":"%s","version":"%s","state":"published","migrate_subscriptions":%s}\n' \
+      "$name" "$ver" "$([[ $MIGRATE == 1 ]] && echo true || echo false)" | tee "$d/products/$name:$ver.json" ;;
+
+  apis:list)
+    need_conn; need_cat
+    n="${POS[0]:-}"; d="$(cat_dir)/apis"
+    { echo '{"results":['
+      first=1
+      for f in "$d"/"$n":*.yaml; do
+        [[ -f "$f" ]] || continue
+        v="${f##*/$n:}"; v="${v%.yaml}"
+        (( first )) || echo ','; first=0
+        printf '{"name":"%s","version":"%s"}' "$n" "$v"
+      done
+      echo ']}'
+    } ;;
+
+  apis:get)
+    need_conn; need_cat
+    nv="${POS[0]:-}"; f="$(cat_dir)/apis/$nv.yaml"
+    [[ -f "$f" ]] || { echo "Error: Not found: api $nv in catalog $CATALOG" >&2; exit 1; }
+    if [[ "${FAKE_APIC_ENVELOPE:-0}" == 1 ]]; then
+      { echo "type: api"; echo "api:"; sed 's/^/  /' "$f"; }
+    else
+      cat "$f"
+    fi ;;
+
+  *) echo "Error: fake-apic does not implement '$CMD' (args: $*)" >&2; exit 2 ;;
+esac

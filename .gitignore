@@ -21,3 +21,6 @@ Thumbs.db
 
 # Offline bundles built from this repo (large binaries)
 dist/
+
+# Offline tool binaries copied in for tests/e2e (ship in the bundle, not in Git)
+tools/linux-x64/
