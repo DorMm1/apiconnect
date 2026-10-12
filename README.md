@@ -216,9 +216,9 @@ eval "$(scripts/stage-env.sh --stage rc)"                     # APIC_SERVER / AP
 
 Runs every pipeline step (change set, stages 1-4, stage-env, login, compat vs live catalog, publish, tag) in a
 throw-away clone inside a Linux container that mimics an agent - stdin kept open, tools from the offline bundle.
-`tests/e2e/fake-apic` stands in for the toolkit: it reproduces the per-call license prompt (blocks without
-`--accept-license`) and keeps a simulated catalog for `products:publish/get` and `apis:list/get`. Nothing is
-written to a real API Connect instance.
+`tests/e2e/fake-apic` stands in for the toolkit: it reproduces the two first-run questions (license, live help -
+blocks on stdin unless `--accept-license --live-help=false`, persisted per HOME only once both are answered) and keeps
+a simulated catalog for `products:publish/get` and `apis:list/get`. Nothing is written to a real API Connect instance.
 
 ```bash
 cp -r <extracted-bundle>/tools/linux-x64 tools/          # offline binaries (git-ignored)

@@ -34,7 +34,8 @@ show() { [[ -n "$1" && -f "$1" ]] || return 0; echo "      ---- $1"; tail -n 25 
 for t in git yq oasdiff jq spectral yamllint apic timeout realpath; do
   type -P "$t" >/dev/null || { echo "FATAL: '$t' not on PATH"; exit 2; }
 done
-FAKE=0; apic --accept-license version </dev/null 2>&1 | grep -q 'fake toolkit' && FAKE=1
+FAKE=0; apic --accept-license --live-help=false version </dev/null 2>&1 | grep -q 'fake toolkit' && FAKE=1
+FLAGS='--accept-license --live-help=false'        # what scripts/lib.sh puts in front of every toolkit call
 
 # ------------------------------------------------------------------ setup: bare origin + working clone
 git config --global --add safe.directory '*'
@@ -44,13 +45,17 @@ git clone -q --bare "$SRC" "$WORK/origin.git"
 git clone -q "$WORK/origin.git" "$WORK/repo"
 cd "$WORK/repo"
 git config user.email e2e@local; git config user.name e2e
+# Overlay the working tree of $SRC so uncommitted edits are tested too (tracked + untracked, .gitignore honoured)
+( cd "$SRC" && git ls-files -co --exclude-standard -z | tar --null -T - -cf - --ignore-failed-read 2>/dev/null ) | tar -xf - 2>/dev/null
+git add -A >/dev/null 2>&1
+if ! git diff --cached --quiet; then git commit -qm "e2e: uncommitted working tree of $SRC"; git push -q origin main; DIRTY=" + uncommitted working tree"; else DIRTY=""; fi
 export FAKE_APIC_STATE="$WORK/fake-apic"; mkdir -p "$FAKE_APIC_STATE"
 CALLS="$FAKE_APIC_STATE/calls.log"; : > "$CALLS"
 API=projects/example-project/dev/apis/example-api.yaml
 PROD=projects/example-project/dev/products/example-product.yaml
 
-echo "repo HEAD : $(git log -1 --format='%h %s')"
-echo "toolkit   : $(apic --accept-license version </dev/null 2>&1 | head -n1)  ($( (( FAKE )) && echo 'fake - full run' || echo 'REAL - publish sections skipped'))"
+echo "repo      : $(git -C "$SRC" log -1 --format='%h %s')$DIRTY"
+echo "toolkit   : $(apic $FLAGS version </dev/null 2>&1 | head -n1)  ($( (( FAKE )) && echo 'fake - full run' || echo 'REAL - publish sections skipped'))"
 echo "tools     : $(yq --version) | $(oasdiff --version 2>&1 | head -n1) | $(jq --version) | spectral $(spectral --version) | $(yamllint --version)"
 
 # ------------------------------------------------------------------ 0
@@ -58,26 +63,34 @@ section "0. Syntax check of every script"
 for f in scripts/*.sh tools/*.sh "$SRC"/tests/e2e/*.sh "$SRC"/tests/e2e/fake-apic; do if bash -n "$f"; then ok "bash -n ${f#"$SRC"/}"; else bad "bash -n ${f#"$SRC"/}"; fi; done
 
 # ------------------------------------------------------------------ 1
-section "1. License prompt: toolkit without --accept-license, stdin = open pipe (as in an agent step)"
-timeout 20 apic validate "$PROD" < <(sleep 60) > $LOG/t1a.txt 2>&1; rc=$?
-if (( FAKE )); then
-  expect_rc "plain 'apic validate' blocks on the license prompt -> killed by timeout" 124 $rc $LOG/t1a.txt
-else
-  info "real toolkit, plain 'apic validate' with stdin open: rc=$rc ($([[ $rc == 124 ]] && echo 'BLOCKS - --accept-license is mandatory in every step' || echo 'did not block'))"
-fi
-timeout 60 apic --accept-license validate "$PROD" < <(sleep 90) > $LOG/t1b.txt 2>&1; rc=$?
-expect_rc "'apic --accept-license validate' completes" 0 $rc $LOG/t1b.txt
-if (( FAKE )); then
-  timeout 20 apic validate "$PROD" </dev/null > $LOG/t1c.txt 2>&1; rc=$?
-  expect_rc "plain 'apic validate' with stdin closed continues on EOF (what Cancel did)" 0 $rc $LOG/t1c.txt
-fi
+# Every call below runs with a fresh HOME (no ~/.apiconnect) and stdin = an open pipe, like an agent step.
+# With the real toolkit the outcomes are reported, not asserted - except that the flag pair must always complete.
+section "1. First-run questions (license, live help) on a fresh HOME, stdin = open pipe"
+H1="$WORK/home1"; H2="$WORK/home2"; mkdir -p "$H1" "$H2"
+real_info() { info "real toolkit: $1 -> rc=$2 ($([[ $2 == 124 ]] && echo BLOCKS || echo 'does not block'))"; }
+HOME=$H1 timeout 20 apic validate "$PROD" < <(sleep 60) > $LOG/t1a.txt 2>&1; rc=$?
+(( FAKE )) && expect_rc "plain 'apic validate' blocks (license question)" 124 $rc $LOG/t1a.txt || real_info "plain 'apic validate'" $rc
+HOME=$H1 timeout 20 apic --accept-license validate "$PROD" < <(sleep 60) > $LOG/t1b.txt 2>&1; rc=$?
+(( FAKE )) && expect_rc "'--accept-license' alone still blocks (live-help question)" 124 $rc $LOG/t1b.txt || real_info "'apic --accept-license validate'" $rc
+HOME=$H1 timeout 60 apic --accept-license validate "$PROD" </dev/null > $LOG/t1c.txt 2>&1; rc=$?
+expect_rc "'--accept-license' with stdin closed completes (EOF answers the pending question - what Cancel did)" 0 $rc $LOG/t1c.txt
+[[ -e "$H1/.apiconnect" ]]; rc=$?
+(( FAKE )) && expect_rc "...but nothing is persisted: no ~/.apiconnect (rc 1 = absent)" 1 $rc || info "real toolkit: ~/.apiconnect after '--accept-license' alone: $([[ $rc == 0 ]] && echo present || echo absent)"
+HOME=$H1 timeout 60 apic $FLAGS version < <(sleep 90) > $LOG/t1d.txt 2>&1; rc=$?
+expect_rc "'apic $FLAGS version' completes with stdin open (the Dockerfile one-liner)" 0 $rc $LOG/t1d.txt
+[[ -e "$H1/.apiconnect" ]]; rc=$?
+(( FAKE )) && expect_rc "...and persists the answers: ~/.apiconnect created (rc 0 = present)" 0 $rc || info "real toolkit: ~/.apiconnect after the flag pair: $([[ $rc == 0 ]] && echo present || echo absent)"
+HOME=$H1 timeout 60 apic validate "$PROD" < <(sleep 90) > $LOG/t1e.txt 2>&1; rc=$?
+(( FAKE )) && expect_rc "same HOME afterwards: plain 'apic validate' no longer blocks" 0 $rc $LOG/t1e.txt || real_info "plain 'apic validate' after the flag pair, same HOME" $rc
+HOME=$H2 timeout 20 apic validate "$PROD" < <(sleep 60) > $LOG/t1f.txt 2>&1; rc=$?
+(( FAKE )) && expect_rc "another HOME (= another user, e.g. the agent user): blocks again" 124 $rc $LOG/t1f.txt || real_info "plain 'apic validate' from another HOME" $rc
 : > "$CALLS"
 
 # ------------------------------------------------------------------ 2
-section "2. lib.sh apic() wrapper"
+section "2. lib.sh apic() wrapper (HOME without ~/.apiconnect, stdin open)"
 ( source scripts/lib.sh; APIC_TIMEOUT=60 apic validate "$PROD" ) < <(sleep 90) > $LOG/t2a.txt 2>&1; rc=$?
 expect_rc "wrapper completes although the step's stdin is an open pipe" 0 $rc $LOG/t2a.txt
-(( FAKE )) && expect_grep "wrapper injected --accept-license" '^--accept-license validate ' "$CALLS"
+(( FAKE )) && expect_grep "wrapper injected '$FLAGS'" "^$FLAGS validate " "$CALLS"
 if (( FAKE )); then
   ( source scripts/lib.sh; FAKE_APIC_SLEEP=10 APIC_TIMEOUT=2 apic version ) > $LOG/t2b.txt 2>&1; rc=$?
   expect_rc "wrapper timeout (APIC_TIMEOUT=2, call takes 10s) fails" 124 $rc $LOG/t2b.txt
@@ -188,7 +201,7 @@ if (( FAKE )); then
   expect_grep "reported as NEW" "NEW +$API +\(no published example-api 1.x in catalog 'example-project-dev'\)" $LOG/t7-live.txt
   bash scripts/publish.sh --stage dev out/dev/products.txt < <(sleep 30) > $LOG/t7-pub.txt 2>&1; rc=$?
   expect_rc "publish.sh --stage dev" 0 $rc $LOG/t7-pub.txt
-  expect_grep "products:publish targeted the dev instance + catalog" "^--accept-license products:publish --server $DEV_SERVER --org $APIC_ORG --catalog example-project-dev --format json --output - $PROD\$" "$CALLS"
+  expect_grep "products:publish targeted the dev instance + catalog" "^$FLAGS products:publish --server $DEV_SERVER --org $APIC_ORG --catalog example-project-dev --format json --output - $PROD\$" "$CALLS"
   expect_nogrep "first publish: no --migrate_subscriptions" 'products:publish.*--migrate_subscriptions' "$CALLS"
   expect_grep "state asserted after publish" "OK +example-product:1.1.0 is published in 'example-project-dev'" $LOG/t7-pub.txt
   [[ -s out/publish/example-project_example-product_1.1.0.json ]]; expect_rc "publish response saved under out/publish" 0 $?
@@ -279,9 +292,9 @@ git checkout -q -- projects
 # ------------------------------------------------------------------ summary
 if (( FAKE )); then
   section "Toolkit call log"
-  total=$(grep -c . "$CALLS"); noflag=$(grep -vc '^--accept-license' "$CALLS")
-  expect_eq "every scripted toolkit call carried --accept-license (calls without it)" "0" "$noflag"
-  echo "  ($total toolkit calls recorded: $(sed 's/^--accept-license //' "$CALLS" | awk '{print $1}' | sort | uniq -c | awk '{printf "%s x%s  ", $2, $1}'))"
+  total=$(grep -c . "$CALLS"); noflag=$(grep -vc "^$FLAGS " "$CALLS")
+  expect_eq "every scripted toolkit call carried '$FLAGS' (calls without them)" "0" "$noflag"
+  echo "  ($total toolkit calls recorded: $(sed "s/^$FLAGS //" "$CALLS" | awk '{print $1}' | sort | uniq -c | awk '{printf "%s x%s  ", $2, $1}'))"
 fi
 
 echo

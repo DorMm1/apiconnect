@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # fake-apic - stand-in for the IBM API Connect 10.0.8 toolkit, used ONLY by tests/e2e (never by the pipeline).
 #
-# Reproduces what was observed on the real agent:
-#   * without --accept-license EVERY call prompts on stdin: it blocks while stdin is open and continues on EOF
-#     (which is exactly what happened when the Azure DevOps job was cancelled)
-#   * acceptance is not persisted between calls (no ~/.apiconnect)
+# First-run behaviour, modelled on what was observed on a real 10.0.8.x agent:
+#   * on a HOME without ~/.apiconnect the toolkit asks two questions on stdin - the license (skipped with
+#     --accept-license) and "live help" (skipped with --live-help=false). A pending question blocks while stdin
+#     is an open pipe (an agent step) and continues on EOF (what Cancel did).
+#   * the answers are persisted to ~/.apiconnect only when BOTH were given by flag; --accept-license alone leaves
+#     the second question pending on every call, so nothing is persisted (no ~/.apiconnect appeared).
+#   * persistence is per user HOME.
 # Catalog state (published products / API definitions) and a call log live in $FAKE_APIC_STATE.
 #   FAKE_APIC_SLEEP=<s>   delay every call (timeout tests)
 #   FAKE_APIC_ENVELOPE=1  apis:get returns {api: <definition>} instead of the bare definition
@@ -12,11 +15,25 @@ set -uo pipefail
 STATE="${FAKE_APIC_STATE:-/tmp/fake-apic}"; mkdir -p "$STATE"
 printf '%s\n' "$*" >> "$STATE/calls.log"
 
-ACCEPT=0; ARGS=()
-for a in "$@"; do if [[ "$a" == --accept-license ]]; then ACCEPT=1; else ARGS+=("$a"); fi; done
-if (( ! ACCEPT )); then
-  printf 'You must accept the IBM API Connect license to continue. Accept? (y/n) ' >&2
-  IFS= read -r _ans || true
+ACCEPT=0; LIVEHELP=0; ARGS=()
+for a in "$@"; do
+  case "$a" in
+    --accept-license) ACCEPT=1 ;;
+    --live-help=*)    LIVEHELP=1 ;;
+    *) ARGS+=("$a") ;;
+  esac
+done
+FIRSTRUN="$HOME/.apiconnect/first-run-answered"
+if [[ ! -f "$FIRSTRUN" ]]; then
+  if (( ! ACCEPT )); then
+    printf 'You must accept the IBM API Connect license to continue. Accept? (y/n) ' >&2
+    IFS= read -r _ans || true
+  fi
+  if (( ! LIVEHELP )); then
+    printf 'Enable live help (sends anonymous usage data to IBM)? (y/n) ' >&2
+    IFS= read -r _ans || true
+  fi
+  if (( ACCEPT && LIVEHELP )); then mkdir -p "$HOME/.apiconnect" && : > "$FIRSTRUN"; fi
 fi
 [[ -n "${FAKE_APIC_SLEEP:-}" ]] && sleep "$FAKE_APIC_SLEEP"
 

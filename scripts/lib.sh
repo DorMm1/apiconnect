@@ -36,17 +36,21 @@ yq_str() { yq -r "$2 // \"\"" "$1" 2>/dev/null; }
 apic_conn() { echo "--server ${APIC_SERVER} --org ${APIC_ORG}"; }
 
 # Every toolkit call made by the scripts goes through this wrapper:
-#   * stdin from /dev/null   - the toolkit can never block on an interactive prompt (license, usage data, "y/n")
-#   * --accept-license       - non-interactive license acceptance on every call (IBM: "Scripting with the toolkit commands")
+#   * stdin from /dev/null   - the toolkit can never block on an interactive prompt (license, live help, "y/n")
+#   * --accept-license       - answers the license question (IBM: "Scripting with the toolkit commands")
+#   * --live-help=false      - answers the "live help" question; on a fresh HOME the toolkit asks BOTH on first use
+#                              and persists them (~/.apiconnect) only once both are answered, so the pair is what
+#                              makes a call non-interactive - per user HOME, hence on every call here
 #   * timeout                - a hang (prompt, unreachable server) fails after APIC_TIMEOUT seconds with a clear message
 # Interactive use (e.g. `apic login --sso` in a terminal) is unaffected: this function only exists inside the scripts.
 APIC_TIMEOUT="${APIC_TIMEOUT:-600}"
+APIC_FLAGS=(--accept-license --live-help=false)
 apic() {
   local rc=0
   if type -P timeout >/dev/null 2>&1; then
-    timeout "$APIC_TIMEOUT" "$(type -P apic)" --accept-license "$@" </dev/null || rc=$?
+    timeout "$APIC_TIMEOUT" "$(type -P apic)" "${APIC_FLAGS[@]}" "$@" </dev/null || rc=$?
   else
-    "$(type -P apic)" --accept-license "$@" </dev/null || rc=$?
+    "$(type -P apic)" "${APIC_FLAGS[@]}" "$@" </dev/null || rc=$?
   fi
   if (( rc == 124 )); then
     vso_error "apic ${1:-} did not finish within ${APIC_TIMEOUT}s - interactive prompt, or the management server is unreachable"

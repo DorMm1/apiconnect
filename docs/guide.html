@@ -665,7 +665,8 @@ $ git push -u origin HEAD          <span class="c"># then open the PR</span></pr
 sudo bash tools/install-offline.sh              <span class="c"># verifies SHA256SUMS, installs to /usr/local/bin, pip installs yamllint</span></pre></li>
     <li><b>Install the IBM toolkit.</b> In API Manager (any instance; use the highest fix pack if they differ) click <i>Tools for download</i>, download the Linux CLI.
 <pre>sudo install -m 0755 apic-slim /usr/local/bin/apic    <span class="c"># or `apic` if you downloaded CLI + Designer</span>
-apic --accept-license version                         <span class="c"># must match the instances, 10.0.8.x</span></pre></li>
+apic --accept-license --live-help=false version       <span class="c"># must match the instances, 10.0.8.x</span></pre>
+<p class="small">Both flags answer the toolkit’s two first-run questions (license, live help) and persist them for the user running the command — run it once as the agent user (Dockerfile: same <code>USER</code>), otherwise every call blocks on stdin in a pipeline step. The scripts pass both flags on every call regardless (<code>scripts/lib.sh</code>); see the runbook, step 2.</p></li>
     <li><b>Verify as the agent user.</b> <code>for t in yamllint spectral yq oasdiff jq apic git realpath; do command -v $t; done</code> — every line must print a path.</li>
     <li><b>Push the repository</b> to your on-prem Git (Azure Repos or GitHub Enterprise): <code>git clone APIConnect-catalog.gitbundle APIConnect-catalog</code>, add the remote, push <code>main</code>.</li>
     <li><b>Tell the pipeline it is offline.</b> In variable group <code>apic-shared</code> set <code>TOOLS_MODE = offline</code>. The tooling step then only checks that the tools exist and never reaches the internet; a missing tool fails the job with a clear message.</li>

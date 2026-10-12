@@ -106,5 +106,7 @@ steps:
       fi
     displayName: 'tools: apic on PATH'
 
-- bash: apic --accept-license version </dev/null
+# First use on this agent/HOME: both flags answer the two first-run questions (license, live help) and persist them.
+# The scripts do not rely on that - scripts/lib.sh passes the same flags on every call.
+- bash: apic --accept-license --live-help=false version </dev/null
   displayName: 'tools: apic version'

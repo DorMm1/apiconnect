@@ -42,7 +42,10 @@ fi
 
 echo "== Checking the IBM API Connect toolkit"
 if command -v apic >/dev/null 2>&1; then
-  apic --accept-license version 2>&1 | head -n 3 | sed 's/^/   /'
+  # Both flags answer the toolkit's two first-run questions (license, live help) and persist them for THIS user's
+  # HOME. Run it once more as the agent user if that is not who runs the installer; the pipeline scripts pass the
+  # same flags on every call anyway (scripts/lib.sh).
+  apic --accept-license --live-help=false version </dev/null 2>&1 | head -n 3 | sed 's/^/   /'
 else
   echo "   apic not found on PATH: download it from API Manager -> Tools for download and copy it to $PREFIX/apic (chmod +x)"
 fi
